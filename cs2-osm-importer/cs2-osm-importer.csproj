@@ -60,6 +60,9 @@
         <Reference Include="Unity.Mathematics">
             <Private>false</Private>
         </Reference>
+        <Reference Include="$(ManagedPath)\System.Memory.dll">
+            <Private>false</Private>
+        </Reference>
     </ItemGroup>
 
     <ItemGroup>

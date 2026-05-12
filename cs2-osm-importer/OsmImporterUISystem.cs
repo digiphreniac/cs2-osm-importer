@@ -1,0 +1,191 @@
+using System;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using Colossal.UI.Binding;
+using Game.UI;
+
+namespace cs2_osm_importer
+{
+    public partial class OsmImporterUISystem : UISystemBase
+    {
+        private ValueBinding<bool> _menuEnabled;
+        private ValueBinding<string> _status;
+        private ValueBinding<bool> _importing;
+        private ValueBinding<string> _defaultOsmPath;
+        private ValueBinding<bool> _hasLoadedData;
+        private ValueBinding<string> _roadTypeCounts;
+        private OsmImportSystem _importSystem;
+        private string _lastStatus = "Ready.";
+        private bool _lastImporting;
+        private bool _lastHasLoadedData;
+        private string _lastRoadTypeCounts = "{}";
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+
+            _importSystem = World.GetOrCreateSystemManaged<OsmImportSystem>();
+
+            _menuEnabled = new ValueBinding<bool>(Mod.Id, "isOSMToolMenuEnabled", false, ValueWriters.Create<bool>());
+            _status = new ValueBinding<string>(Mod.Id, "importStatus", "Ready.", ValueWriters.Create<string>());
+            _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
+            _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
+            _hasLoadedData = new ValueBinding<bool>(Mod.Id, "hasLoadedData", false, ValueWriters.Create<bool>());
+            _roadTypeCounts = new ValueBinding<string>(Mod.Id, "roadTypeCounts", "{}", ValueWriters.Create<string>());
+
+            AddBinding(_menuEnabled);
+            AddBinding(_status);
+            AddBinding(_importing);
+            AddBinding(_defaultOsmPath);
+            AddBinding(_hasLoadedData);
+            AddBinding(_roadTypeCounts);
+            AddBinding(new TriggerBinding<bool>(Mod.Id, "setIsOSMToolMenuEnabled", SetMenuEnabled, ValueReaders.Create<bool>()));
+            AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
+            AddBinding(new TriggerBinding<string>(Mod.Id, "generateOSMRoads", GenerateOSMRoads, ValueReaders.Create<string>()));
+            AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllRoads", DeleteAllRoads, ValueReaders.Create<string>()));
+        }
+
+        private void SetMenuEnabled(bool enabled)
+        {
+            Mod.log.Info($"SetMenuEnabled({enabled})");
+            _menuEnabled.Update(enabled);
+        }
+
+        private void LoadOSMData(string payload)
+        {
+            var options = ParseImportOptions(payload);
+            if (!_importSystem.LoadOsmData(new OsmImportOptions
+            {
+                Path = options.Path,
+                SimplifyToleranceMeters = options.SimplifyToleranceMeters,
+                CurveToleranceMeters = options.CurveToleranceMeters,
+                ScaleFactor = options.ScaleFactor <= 0f ? 1f : options.ScaleFactor,
+                ElevationMeters = 0.2f,
+                MaxWays = options.MaxWays <= 0 ? 10000 : options.MaxWays
+            }))
+            {
+                _status.Update("An OSM import is already running.");
+                return;
+            }
+
+            UpdateImportBindings(force: true);
+        }
+
+        private void GenerateOSMRoads(string payload)
+        {
+            var options = new OsmGenerateOptions();
+            foreach (var highwayType in ReadStringArray(payload, "roadTypes"))
+                options.HighwayTypes.Add(highwayType);
+
+            if (!_importSystem.GenerateRoads(options))
+            {
+                _status.Update("An OSM operation is already running.");
+                return;
+            }
+
+            UpdateImportBindings(force: true);
+        }
+
+        private void DeleteAllRoads(string payload)
+        {
+            if (!_importSystem.DeleteAllRoads())
+            {
+                _status.Update("An OSM operation is already running.");
+                return;
+            }
+
+            UpdateImportBindings(force: true);
+        }
+
+        private static OsmImportOptions ParseImportOptions(string payload)
+        {
+            return new OsmImportOptions
+            {
+                Path = ReadString(payload, "path"),
+                SimplifyToleranceMeters = ReadFloat(payload, "tolerance", 1f),
+                CurveToleranceMeters = ReadFloat(payload, "curveTolerance", 0.5f),
+                ScaleFactor = ReadFloat(payload, "scaleFactor", 1f),
+                MaxWays = ReadInt(payload, "maxWays", 10000)
+            };
+        }
+
+        private static string ReadString(string payload, string name)
+        {
+            var match = Regex.Match(payload ?? string.Empty, $"\"{name}\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
+            return match.Success ? Regex.Unescape(match.Groups[1].Value) : string.Empty;
+        }
+
+        private static float ReadFloat(string payload, string name, float fallback)
+        {
+            var match = Regex.Match(payload ?? string.Empty, $"\"{name}\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+            return match.Success && float.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                ? value
+                : fallback;
+        }
+
+        private static int ReadInt(string payload, string name, int fallback)
+        {
+            var match = Regex.Match(payload ?? string.Empty, $"\"{name}\"\\s*:\\s*(-?\\d+)");
+            return match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+                ? value
+                : fallback;
+        }
+
+        private static string[] ReadStringArray(string payload, string name)
+        {
+            var match = Regex.Match(payload ?? string.Empty, $"\"{name}\"\\s*:\\s*\\[(.*?)\\]");
+            if (!match.Success)
+                return Array.Empty<string>();
+
+            return Regex.Matches(match.Groups[1].Value, "\"((?:\\\\.|[^\"])*)\"")
+                .Cast<Match>()
+                .Select(item => Regex.Unescape(item.Groups[1].Value))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .ToArray();
+        }
+
+        protected override void OnUpdate()
+        {
+            base.OnUpdate();
+            UpdateImportBindings(force: false);
+        }
+
+        private void UpdateImportBindings(bool force)
+        {
+            if (force || _lastStatus != _importSystem.Status)
+            {
+                _lastStatus = _importSystem.Status;
+                _status.Update(_lastStatus);
+            }
+
+            if (force || _lastImporting != _importSystem.IsImporting)
+            {
+                _lastImporting = _importSystem.IsImporting;
+                _importing.Update(_lastImporting);
+            }
+
+            if (force || _lastHasLoadedData != _importSystem.HasLoadedData)
+            {
+                _lastHasLoadedData = _importSystem.HasLoadedData;
+                _hasLoadedData.Update(_lastHasLoadedData);
+            }
+
+            if (force || _lastRoadTypeCounts != _importSystem.RoadTypeCountsJson)
+            {
+                _lastRoadTypeCounts = _importSystem.RoadTypeCountsJson;
+                _roadTypeCounts.Update(_lastRoadTypeCounts);
+            }
+        }
+
+        private static string GetDefaultOsmPath()
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(userProfile))
+                return string.Empty;
+
+            return Path.Combine(userProfile, "Downloads") + Path.DirectorySeparatorChar;
+        }
+    }
+}

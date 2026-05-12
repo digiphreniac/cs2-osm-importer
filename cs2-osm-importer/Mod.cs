@@ -2,16 +2,8 @@
 using Colossal.Logging;
 
 using Game;
-using Game.Input;
 using Game.Modding;
 using Game.SceneFlow;
-
-// using Game.Debug;
-// using System;
-// using Game.UI;
-
-using Unity.Entities;
-using UnityEngine.InputSystem;
 
 
 namespace cs2_osm_importer
@@ -31,6 +23,9 @@ namespace cs2_osm_importer
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
                 log.Info($"Current mod asset at {asset.path}");
+
+            updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
+            updateSystem.UpdateAt<OsmImportSystem>(SystemUpdatePhase.ToolUpdate);
         }
 
         public void OnDispose()

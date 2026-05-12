@@ -1,0 +1,62 @@
+using System.Collections.Generic;
+using Unity.Entities;
+using Unity.Mathematics;
+
+namespace cs2_osm_importer
+{
+    internal struct OsmImportDefinition : IComponentData
+    {
+        public int SessionId;
+    }
+
+    internal sealed class OsmImportOptions
+    {
+        public string Path { get; set; } = string.Empty;
+        public float SimplifyToleranceMeters { get; set; } = 1f;
+        public float CurveToleranceMeters { get; set; } = 0.5f;
+        public float ScaleFactor { get; set; } = 1f;
+        public float ElevationMeters { get; set; } = 0.2f;
+        public string RoadPrefabName { get; set; } = string.Empty;
+        public int MaxWays { get; set; } = 10000;
+    }
+
+    internal sealed class OsmGenerateOptions
+    {
+        public HashSet<string> HighwayTypes { get; } = new HashSet<string>();
+    }
+
+    internal sealed class OsmImportResult
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public int ParsedNodes { get; set; }
+        public int ParsedWays { get; set; }
+        public int ImportedSegments { get; set; }
+    }
+
+    internal sealed class OsmDocument
+    {
+        public List<OsmWay> Ways { get; } = new List<OsmWay>();
+        public int NodeCount { get; set; }
+        public double CenterLat { get; set; }
+        public double CenterLon { get; set; }
+        public float ElevationMeters { get; set; }
+        public float3 Min { get; set; }
+        public float3 Max { get; set; }
+        public float3 OriginOffset { get; set; }
+        public bool HasBounds { get; set; }
+    }
+
+    internal sealed class OsmWay
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Highway { get; set; } = string.Empty;
+        public bool UsesStructuralElevation { get; set; }
+        public float BaseElevationOffsetMeters { get; set; }
+        public int InclineDirection { get; set; }
+        public float InclinePercent { get; set; }
+        public List<float> TerrainHeights { get; } = new List<float>();
+        public List<float3> Points { get; } = new List<float3>();
+    }
+}
