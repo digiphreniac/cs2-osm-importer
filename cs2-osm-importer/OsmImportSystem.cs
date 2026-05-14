@@ -82,7 +82,9 @@ namespace cs2_osm_importer
         private WorkPhase _phase = WorkPhase.Idle;
 
         internal bool IsImporting { get; private set; }
-        internal string Status { get; private set; } = "Ready.";
+        private string _status = "Ready.";
+        internal string Status => _status;
+        internal bool HasGeneratedAssets { get; private set; }
         internal bool HasLoadedData => _document != null && _document.Ways.Count > 0;
         internal string RoadTypeCountsJson { get; private set; } = "{}";
 
@@ -131,14 +133,14 @@ namespace cs2_osm_importer
             {
                 _document = null;
                 RoadTypeCountsJson = "{}";
-                Status = "Enter a valid OSM file path.";
+                SetStatus("Enter a valid OSM file path.");
                 return true;
             }
 
             _pendingLoadOptions = options;
             IsImporting = true;
             _phase = WorkPhase.LoadData;
-            Status = "OSM file path accepted. Loading...";
+            SetStatus("OSM file path accepted. Loading...");
             Enabled = true;
             Mod.log.Info($"Queued OSM load for '{options.Path}'");
             return true;
@@ -151,7 +153,7 @@ namespace cs2_osm_importer
 
             if (_document == null || _document.Ways.Count == 0)
             {
-                Status = "Load OSM data before generating roads.";
+                SetStatus("Load OSM data before generating roads.");
                 Enabled = true;
                 return true;
             }
@@ -159,7 +161,7 @@ namespace cs2_osm_importer
             _pendingGenerateOptions = options;
             IsImporting = true;
             _phase = WorkPhase.QueueDefinitions;
-            Status = "Preparing road generation...";
+            SetStatus("Preparing road generation...");
             Enabled = true;
             Mod.log.Info($"Queued OSM road generation for selected types: {SelectedTypesLabel(options)}");
             PrepareGeneration();
@@ -173,7 +175,7 @@ namespace cs2_osm_importer
 
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
-            Status = "Deleting roads...";
+            SetStatus("Deleting roads...");
             Enabled = true;
             return true;
         }
@@ -184,7 +186,7 @@ namespace cs2_osm_importer
             {
                 _activeOptions = _pendingLoadOptions;
                 _pendingLoadOptions = null;
-                Status = "Parsing OSM file...";
+                SetStatus("Parsing OSM file...");
                 Mod.log.Info($"Parsing OSM file '{_activeOptions.Path}'");
 
                 if (string.IsNullOrWhiteSpace(_activeOptions.Path) || !File.Exists(_activeOptions.Path))
@@ -271,9 +273,9 @@ namespace cs2_osm_importer
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _roadNamesApplied = false;
                 Mod.log.Info($"Baseline road edge count before OSM road generation: {_baselineEdgeCount}");
-                Status = _generationTypeOrder.Count > 0
+                SetStatus(_generationTypeOrder.Count > 0
                     ? $"Generating \"{_generationTypeOrder[0]}\" roads (1/{_generationTypeOrder.Count})"
-                    : "Generating selected OSM roads...";
+                    : "Generating selected OSM roads...");
                 _loggedFirstQueuedSegment = false;
             }
             catch (Exception ex)
@@ -318,6 +320,7 @@ namespace cs2_osm_importer
                             _pointIndex++;
                             if (created != Entity.Null)
                             {
+                                HasGeneratedAssets = true;
                                 _importedSegments++;
                                 _queuedSegmentInfos.Add(new QueuedSegmentInfo
                                 {
@@ -354,9 +357,9 @@ namespace cs2_osm_importer
                 var currentTypeLabel = _typeIndex < _generationTypeOrder.Count
                     ? _generationTypeOrder[_typeIndex]
                     : string.Empty;
-                Status = !string.IsNullOrWhiteSpace(currentTypeLabel)
+                SetStatus(!string.IsNullOrWhiteSpace(currentTypeLabel)
                     ? $"Generating \"{currentTypeLabel}\" roads ({Math.Min(_typeIndex + 1, _generationTypeOrder.Count)}/{_generationTypeOrder.Count})"
-                    : "Generating selected OSM roads...";
+                    : "Generating selected OSM roads...");
                 if (_importedSegments - _lastLoggedSegments >= 1000)
                 {
                     _lastLoggedSegments = _importedSegments;
@@ -381,7 +384,7 @@ namespace cs2_osm_importer
                             $"min={FormatPoint(_document.Min)}, max={FormatPoint(_document.Max)}");
                     }
                     _phase = WorkPhase.WaitForGameApply;
-                    Status = $"Queued {_importedSegments} road definitions. Waiting for CS2 to generate roads...";
+                    SetStatus($"Queued {_importedSegments} road definitions. Waiting for CS2 to generate roads...");
                 }
             }
             catch (Exception ex)
@@ -400,9 +403,9 @@ namespace cs2_osm_importer
                 var generatedRoadEdges = Math.Max(0, CountAllRoadEdges() - _baselineEdgeCount);
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
-                Status = pendingDefinitions > 0
+                SetStatus(pendingDefinitions > 0
                     ? $"Waiting for CS2 road generation... {consumedDefinitions}/{_importedSegments} definitions consumed"
-                    : $"CS2 consumed {_importedSegments} OSM definitions. Verifying generated roads...";
+                    : $"CS2 consumed {_importedSegments} OSM definitions. Verifying generated roads...");
 
                 if (pendingDefinitions != _lastPendingDefinitions && _applyWaitFrames - _lastWaitLogFrame >= 300)
                 {
@@ -415,7 +418,7 @@ namespace cs2_osm_importer
                 {
                     if (pendingDefinitions > 0)
                     {
-                        Mod.log.Info($"CS2 generated {generatedRoadEdges} road edges but {pendingDefinitions} definitions remain pending. Proceeding with road names.");
+                    Mod.log.Info($"CS2 generated {generatedRoadEdges} road edges but {pendingDefinitions} definitions remain pending. Proceeding with road names.");
                     }
                     ApplyQueuedRoadNames();
                     var uniqueNames = _queuedSegmentInfos
@@ -432,6 +435,7 @@ namespace cs2_osm_importer
                         : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified. Names: {namesPreview}";
 
                     Mod.log.Info($"{message} Session {_sessionId}");
+                    HasGeneratedAssets = true;
                     Complete(message);
                     return;
                 }
@@ -443,6 +447,7 @@ namespace cs2_osm_importer
                         : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified.";
 
                     Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
+                    HasGeneratedAssets = true;
                     Complete(message);
                 }
             }
@@ -459,6 +464,7 @@ namespace cs2_osm_importer
             {
                 var deletedEdges = MarkRoadEdgesDeleted();
                 var deletedNodes = MarkRoadNodesDeleted();
+                HasGeneratedAssets = false;
                 Complete($"Marked {deletedEdges} road edges and {deletedNodes} road nodes for deletion.");
                 Mod.log.Info(Status);
             }
@@ -471,12 +477,17 @@ namespace cs2_osm_importer
 
         private void Complete(string message)
         {
-            Status = message;
+            SetStatus(message);
             IsImporting = false;
             _phase = WorkPhase.Idle;
             _pendingLoadOptions = null;
             _pendingGenerateOptions = null;
             _activeGenerateOptions = null;
+        }
+
+        private void SetStatus(string message)
+        {
+            _status = message;
         }
 
         private Entity CreateNetCourseDefinition(float3 start, float3 end, Entity prefabEntity, float elevationOffset = 0f)
