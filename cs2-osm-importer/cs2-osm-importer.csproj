@@ -5,6 +5,7 @@
 
         <!--The file where mod information which is required for publishing mod on PDX mods are stored-->
         <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
+        <CSIIUserDataPath>$([System.Environment]::GetEnvironmentVariable('CSII_USERDATAPATH'))</CSIIUserDataPath>
     </PropertyGroup>
 
     <!--Imports must be after PropertyGroup block-->
@@ -84,5 +85,21 @@
 
     <Target Name="BuildUI" AfterTargets="AfterBuild">
         <Exec Command="npm run build" WorkingDirectory="$(ProjectDir)/ui" />
+    </Target>
+
+    <Target Name="CopyUiIcons" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">
+        <MakeDir Directories="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images" />
+        <Copy
+            SourceFiles="$(ProjectDir)ui\src\assets\Openstreetmap_logo.png"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\Openstreetmap_logo.png"
+            SkipUnchangedFiles="true" />
+    </Target>
+
+    <Target Name="CopyUiLocalization" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">
+        <MakeDir Directories="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\lang" />
+        <Copy
+            SourceFiles="$(ProjectDir)ui\lang\en-US.json"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\lang\en-US.json"
+            SkipUnchangedFiles="true" />
     </Target>
 </Project>

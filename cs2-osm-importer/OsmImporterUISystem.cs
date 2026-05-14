@@ -4,19 +4,20 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Colossal.UI.Binding;
+using Game.UI.Editor;
 using Game.UI;
 
 namespace cs2_osm_importer
 {
     public partial class OsmImporterUISystem : UISystemBase
     {
-        private ValueBinding<bool> _menuEnabled;
         private ValueBinding<string> _status;
         private ValueBinding<bool> _importing;
         private ValueBinding<string> _defaultOsmPath;
         private ValueBinding<bool> _hasLoadedData;
         private ValueBinding<string> _roadTypeCounts;
         private OsmImportSystem _importSystem;
+        private EditorToolUISystem _editorToolUISystem;
         private string _lastStatus = "Ready.";
         private bool _lastImporting;
         private bool _lastHasLoadedData;
@@ -27,21 +28,20 @@ namespace cs2_osm_importer
             base.OnCreate();
 
             _importSystem = World.GetOrCreateSystemManaged<OsmImportSystem>();
+            _editorToolUISystem = World.GetOrCreateSystemManaged<EditorToolUISystem>();
+            RegisterEditorTool();
 
-            _menuEnabled = new ValueBinding<bool>(Mod.Id, "isOSMToolMenuEnabled", false, ValueWriters.Create<bool>());
             _status = new ValueBinding<string>(Mod.Id, "importStatus", "Ready.", ValueWriters.Create<string>());
             _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
             _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
             _hasLoadedData = new ValueBinding<bool>(Mod.Id, "hasLoadedData", false, ValueWriters.Create<bool>());
             _roadTypeCounts = new ValueBinding<string>(Mod.Id, "roadTypeCounts", "{}", ValueWriters.Create<string>());
 
-            AddBinding(_menuEnabled);
             AddBinding(_status);
             AddBinding(_importing);
             AddBinding(_defaultOsmPath);
             AddBinding(_hasLoadedData);
             AddBinding(_roadTypeCounts);
-            AddBinding(new TriggerBinding<bool>(Mod.Id, "setIsOSMToolMenuEnabled", SetMenuEnabled, ValueReaders.Create<bool>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "generateOSMRoads", GenerateOSMRoads, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllRoads", DeleteAllRoads, ValueReaders.Create<string>()));
@@ -51,10 +51,22 @@ namespace cs2_osm_importer
 #endif
         }
 
-        private void SetMenuEnabled(bool enabled)
+        private void RegisterEditorTool()
         {
-            Mod.log.Info($"SetMenuEnabled({enabled})");
-            _menuEnabled.Update(enabled);
+            var existingTools = _editorToolUISystem.tools;
+            if (existingTools != null && existingTools.Any(tool => tool != null && tool.id == Mod.ToolId))
+                return;
+
+            var newTools = new IEditorTool[(existingTools?.Length ?? 0) + 1];
+            var i = 0;
+            if (existingTools != null)
+            {
+                foreach (var tool in existingTools)
+                    newTools[i++] = tool;
+            }
+
+            newTools[i] = new OsmEditorTool(Unity.Entities.World.DefaultGameObjectInjectionWorld);
+            _editorToolUISystem.tools = newTools;
         }
 
         private void LoadOSMData(string payload)

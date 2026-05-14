@@ -68,8 +68,6 @@ let savedSettings: ToolSettings = {
   lastLoadedImportSettings: null,
 };
 
-const isOSMToolMenuEnabled$ = bindValue<boolean>(mod.id, "isOSMToolMenuEnabled");
-const setIsOSMToolMenuEnabled = bindTriggerWithArgs<[boolean]>(mod.id, "setIsOSMToolMenuEnabled");
 const importStatus$ = bindValue<string>(mod.id, "importStatus", "Ready.");
 const isImporting$ = bindValue<boolean>(mod.id, "isImporting", false);
 const defaultOsmPath$ = bindValue<string>(mod.id, "defaultOsmPath", "");
@@ -103,15 +101,7 @@ const DEFAULT_IMPORT_FIELD_ERRORS: ImportFieldErrors = {
   maxWays: null,
 };
 
-export const ModToolMenu = ({
-  isOpen,
-  onClose,
-}: {
-  isOpen?: boolean;
-  onClose?: () => void;
-}) => {
-  const boundIsOpen = useValue(isOSMToolMenuEnabled$);
-  const isOSMToolMenuEnabled = isOpen ?? boundIsOpen ?? false;
+export const ModToolMenu = () => {
   const importStatus = useValue(importStatus$);
   const isImporting = useValue(isImporting$);
   const defaultOsmPath = useValue(defaultOsmPath$);
@@ -488,17 +478,6 @@ export const ModToolMenu = ({
     );
   }, [hasLoadedData, roadTypeCountsJson, generatedRoadTypes]);
 
-  const handleClose = useCallback(() => {
-    if (onClose) {
-      onClose();
-      return;
-    }
-
-    if (isOpen === undefined) {
-      setIsOSMToolMenuEnabled(false);
-    }
-  }, [isOpen, onClose]);
-
   const adjustImportNumber = (field: "tolerance" | "curveTolerance" | "scaleFactor" | "maxWays", direction: 1 | -1) => {
     const config = {
       tolerance: { value: tolerance, setter: setTolerance },
@@ -519,13 +498,10 @@ export const ModToolMenu = ({
     }));
   };
 
-  if (!isOSMToolMenuEnabled) return <></>;
-
   return (
     <Panel
       draggable={true}
       header="OSM Import Tool"
-      onClose={handleClose}
       style={{
         width: MENU_WIDTH,
         minHeight: MENU_HEIGHT,

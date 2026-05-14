@@ -11,6 +11,7 @@ namespace cs2_osm_importer
     public class Mod : IMod
     {
         public const string Id = "cs2-osm-importer";
+        public const string ToolId = "OsmImportTool";
 
         public static ILog log = LogManager.GetLogger($"{nameof(cs2_osm_importer)}.{nameof(Mod)}")
             .SetShowsErrorsInUI(true);
@@ -25,6 +26,7 @@ namespace cs2_osm_importer
                 log.Info($"Current mod asset at {asset.path}");
 
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
+            updateSystem.UpdateAt<OsmImportToolSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<OsmImportSystem>(SystemUpdatePhase.ToolUpdate);
         }
 
