@@ -78,6 +78,8 @@ const roadTypeCounts$ = bindValue<string>(mod.id, "roadTypeCounts", "{}");
 const loadOSMData = bindTriggerWithArgs<[string]>(mod.id, "loadOSMData");
 const generateOSMRoads = bindTriggerWithArgs<[string]>(mod.id, "generateOSMRoads");
 const deleteAllRoads = bindTriggerWithArgs<[string]>(mod.id, "deleteAllRoads");
+const isDebugMode$ = bindValue<boolean>(mod.id, "isDebugMode", false);
+const tryValidate = bindTriggerWithArgs<[string]>(mod.id, "tryValidate");
 const FOLDER_ICON = "coui://uil/Standard/Folder.svg";
 const SHOW_ICON = "coui://uil/Standard/ArrowDownThickStroke.svg";
 const HIDE_ICON = "coui://uil/Standard/ArrowUpThickStroke.svg";
@@ -115,6 +117,7 @@ export const ModToolMenu = ({
   const defaultOsmPath = useValue(defaultOsmPath$);
   const hasLoadedData = useValue(hasLoadedData$);
   const roadTypeCountsJson = useValue(roadTypeCounts$);
+  const isDebugMode = useValue(isDebugMode$);
 
   const [path, setPath] = useState(savedSettings.path);
   const [tolerance, setTolerance] = useState(savedSettings.tolerance);
@@ -861,6 +864,21 @@ export const ModToolMenu = ({
               </div>
             )}
           </div>
+
+        {isDebugMode && (
+          <div style={{ marginTop: 2, marginBottom: 4, width: "100%" }}>
+            <button
+              onClick={() => tryValidate(JSON.stringify({}))}
+              disabled={false}
+              style={{
+                ...buttonStyle(false, "rgba(100,100,120,0.7)", "rgba(140,140,160,1)"),
+                width: "100%",
+              }}
+            >
+              Debug: Validate road names
+            </button>
+          </div>
+        )}
 
         <div style={consoleStatusStyle}>
           <span style={consoleIconStyle}>

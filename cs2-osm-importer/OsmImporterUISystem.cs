@@ -45,6 +45,10 @@ namespace cs2_osm_importer
             AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "generateOSMRoads", GenerateOSMRoads, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllRoads", DeleteAllRoads, ValueReaders.Create<string>()));
+#if DEBUG
+            AddBinding(new ValueBinding<bool>(Mod.Id, "isDebugMode", true));
+            AddBinding(new TriggerBinding<string>(Mod.Id, "tryValidate", TryValidateRoadNames, ValueReaders.Create<string>()));
+#endif
         }
 
         private void SetMenuEnabled(bool enabled)
@@ -99,6 +103,14 @@ namespace cs2_osm_importer
             UpdateImportBindings(force: true);
         }
 
+#if DEBUG
+        private void TryValidateRoadNames(string payload)
+        {
+            _status.Update(_importSystem.TryValidateNames());
+        }
+
+#endif
+
         private static OsmImportOptions ParseImportOptions(string payload)
         {
             return new OsmImportOptions
@@ -150,6 +162,11 @@ namespace cs2_osm_importer
         {
             base.OnUpdate();
             UpdateImportBindings(force: false);
+
+            if (_importSystem.PendingNames.Count > 0)
+            {
+                _importSystem.ApplyPendingNames();
+            }
         }
 
         private void UpdateImportBindings(bool force)

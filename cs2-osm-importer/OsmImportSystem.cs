@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
+using System.IO;
+using System.Globalization;
+using System.Linq;
 using Colossal.Mathematics;
 using Game;
 using Game.Common;
@@ -34,7 +35,7 @@ namespace cs2_osm_importer
 
         private PrefabSystem _prefabSystem;
         private NameSystem _nameSystem;
-        private FieldInfo _nameSystemNamesField;
+        internal List<(Entity entity, string name)> PendingNames = new List<(Entity, string)>();
         private GroundHeightSystem _groundHeightSystem;
         private TerrainSystem _terrainSystem;
         private OsmImportOptions _pendingLoadOptions;
@@ -47,6 +48,7 @@ namespace cs2_osm_importer
         private string _prefabName = string.Empty;
         private readonly Dictionary<string, Entity> _highwayPrefabEntities = new Dictionary<string, Entity>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _highwayPrefabNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Entity> _laneSpecificPrefabEntities = new Dictionary<string, Entity>(StringComparer.OrdinalIgnoreCase);
         private int _wayIndex;
         private int _pointIndex;
         private int _typeIndex;
@@ -62,7 +64,19 @@ namespace cs2_osm_importer
         private bool _loggedTerrainMethodProbe;
         private bool _hasTerrainHeightData;
         private TerrainHeightData _terrainHeightData;
-        private List<string> _queuedSegmentNames = new List<string>();
+        private struct QueuedSegmentInfo
+        {
+            public float3 StartPos;
+            public float3 EndPos;
+            public float StartTerrainHeight;
+            public float EndTerrainHeight;
+            public float ElevationOffset;
+            public string Name;
+            public int Lanes;
+            public float3 MidPoint => (StartPos + EndPos) * 0.5f;
+        }
+
+        private List<QueuedSegmentInfo> _queuedSegmentInfos = new List<QueuedSegmentInfo>();
         private List<string> _generationTypeOrder = new List<string>();
         private bool _roadNamesApplied;
         private WorkPhase _phase = WorkPhase.Idle;
@@ -77,7 +91,7 @@ namespace cs2_osm_importer
             base.OnCreate();
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
             _nameSystem = World.GetOrCreateSystemManaged<NameSystem>();
-            _nameSystemNamesField = typeof(NameSystem).GetField("m_Names", BindingFlags.Instance | BindingFlags.NonPublic);
+
             _groundHeightSystem = World.GetOrCreateSystemManaged<GroundHeightSystem>();
             _terrainSystem = World.GetOrCreateSystemManaged<TerrainSystem>();
             Enabled = false;
@@ -232,6 +246,7 @@ namespace cs2_osm_importer
                 _prefabName = prefab.name;
                 _highwayPrefabEntities.Clear();
                 _highwayPrefabNames.Clear();
+                _laneSpecificPrefabEntities.Clear();
                 if (!_prefabSystem.TryGetComponentData(prefab, out _netData))
                 {
                     Complete($"Road prefab '{prefab.name}' has no NetData.");
@@ -252,7 +267,7 @@ namespace cs2_osm_importer
                 {
                     _baselineRoadEdges = edgeArray.ToHashSet();
                 }
-                _queuedSegmentNames.Clear();
+                _queuedSegmentInfos.Clear();
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _roadNamesApplied = false;
                 Mod.log.Info($"Baseline road edge count before OSM road generation: {_baselineEdgeCount}");
@@ -277,7 +292,6 @@ namespace cs2_osm_importer
                 {
                     var highwayType = _generationTypeOrder[_typeIndex];
                     var typeWays = GetWaysForHighwayType(highwayType);
-                    var typePrefab = GetPrefabForHighwayType(highwayType);
                     if (typeWays.Count == 0)
                     {
                         _typeIndex++;
@@ -289,18 +303,32 @@ namespace cs2_osm_importer
                     while (_wayIndex < typeWays.Count)
                     {
                         var way = typeWays[_wayIndex];
+                        var typePrefab = GetPrefabForHighwayType(highwayType, way.Lanes);
 
                         while (_pointIndex < way.Points.Count - 1)
                         {
+                            var segStart = way.Points[_pointIndex];
+                            var segEnd = way.Points[_pointIndex + 1];
+                            var terrainStart = _pointIndex < way.TerrainHeights.Count
+                                ? way.TerrainHeights[_pointIndex] : segStart.y;
+                            var terrainEnd = (_pointIndex + 1) < way.TerrainHeights.Count
+                                ? way.TerrainHeights[_pointIndex + 1] : segEnd.y;
                             var created = CreateNetCourseDefinition(
-                                way.Points[_pointIndex],
-                                way.Points[_pointIndex + 1],
-                                typePrefab);
+                                segStart, segEnd, typePrefab, way.BaseElevationOffsetMeters);
                             _pointIndex++;
                             if (created != Entity.Null)
                             {
                                 _importedSegments++;
-                                _queuedSegmentNames.Add(way.Name ?? string.Empty);
+                                _queuedSegmentInfos.Add(new QueuedSegmentInfo
+                                {
+                                    StartPos = segStart,
+                                    EndPos = segEnd,
+                                    StartTerrainHeight = terrainStart,
+                                    EndTerrainHeight = terrainEnd,
+                                    ElevationOffset = way.BaseElevationOffsetMeters,
+                                    Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
+                                    Lanes = way.Lanes
+                                });
                             }
                             segmentsThisFrame++;
 
@@ -332,12 +360,17 @@ namespace cs2_osm_importer
                 if (_importedSegments - _lastLoggedSegments >= 1000)
                 {
                     _lastLoggedSegments = _importedSegments;
-                    Mod.log.Info($"OSM road generation progress: {_importedSegments} road segments, type {_typeIndex}/{_generationTypeOrder.Count}");
+                    Mod.log.Info(
+                        $"OSM road generation progress: {_importedSegments} road segments, " +
+                        $"type {_typeIndex}/{_generationTypeOrder.Count}, lane summary: {DescribeQueuedLaneCounts()}");
                 }
 
                 if (_typeIndex >= _generationTypeOrder.Count)
                 {
-                Mod.log.Info($"Queued {_importedSegments} OSM road definitions using {_prefabName}. Selected types: {SelectedTypesLabel(_activeGenerateOptions)}. {DocumentBoundsMessage()}");
+                    Mod.log.Info(
+                        $"Queued {_importedSegments} OSM road definitions using {_prefabName}. " +
+                        $"Selected types: {SelectedTypesLabel(_activeGenerateOptions)}. " +
+                        $"Lane summary: {DescribeQueuedLaneCounts()}. {DocumentBoundsMessage()}");
                     if (_document.Ways.Count > 0 && _document.Ways[0].Points.Count > 0)
                     {
                         var firstPoint = _document.Ways[0].Points[0];
@@ -378,12 +411,25 @@ namespace cs2_osm_importer
                     Mod.log.Info($"OSM road generation wait: {consumedDefinitions}/{_importedSegments} definitions consumed, {generatedRoadEdges} new road edges detected");
                 }
 
-                if (pendingDefinitions == 0 && _applyWaitFrames >= 30)
+                if (_applyWaitFrames >= 30 && (pendingDefinitions == 0 || generatedRoadEdges > 0))
                 {
+                    if (pendingDefinitions > 0)
+                    {
+                        Mod.log.Info($"CS2 generated {generatedRoadEdges} road edges but {pendingDefinitions} definitions remain pending. Proceeding with road names.");
+                    }
                     ApplyQueuedRoadNames();
+                    var uniqueNames = _queuedSegmentInfos
+                        .Select(i => i.Name)
+                        .Where(n => !string.IsNullOrWhiteSpace(n))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(n => n)
+                        .ToList();
+                    var namesPreview = uniqueNames.Count > 0
+                        ? string.Join(", ", uniqueNames.Take(50).Select(n => $"\"{EscapeJson(n)}\""))
+                        : "(none)";
                     var message = generatedRoadEdges > 0
-                        ? $"CS2 consumed {_importedSegments} road definitions; detected {generatedRoadEdges} new road edges. Import bounds: {ShortBounds(_document)}"
-                        : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified.";
+                        ? $"CS2 consumed {_importedSegments} road definitions; detected {generatedRoadEdges} new road edges. Import bounds: {ShortBounds(_document)}. Names: {namesPreview}"
+                        : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified. Names: {namesPreview}";
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     Complete(message);
@@ -433,7 +479,7 @@ namespace cs2_osm_importer
             _activeGenerateOptions = null;
         }
 
-        private Entity CreateNetCourseDefinition(float3 start, float3 end, Entity prefabEntity)
+        private Entity CreateNetCourseDefinition(float3 start, float3 end, Entity prefabEntity, float elevationOffset = 0f)
         {
             var delta = end - start;
             var length = math.length(delta);
@@ -444,7 +490,7 @@ namespace cs2_osm_importer
             {
                 _loggedFirstQueuedSegment = true;
                 Mod.log.Info(
-                    $"First queued segment sample: start={FormatPoint(start)}, end={FormatPoint(end)}, length={length:F2}, prefab={DescribePrefab(prefabEntity)}");
+                    $"First queued segment sample: start={FormatPoint(start)}, end={FormatPoint(end)}, length={length:F2}, prefab={DescribePrefab(prefabEntity)}, elevationOffset={elevationOffset:F1}");
             }
 
             var tangent = length > 0.001f ? delta / 3f : new float3(0f, 0f, 0f);
@@ -496,50 +542,278 @@ namespace cs2_osm_importer
 
         private void ApplyQueuedRoadNames()
         {
-            if (_roadNamesApplied || _nameSystem == null || _nameSystemNamesField == null || _queuedSegmentNames.Count == 0)
+            if (_roadNamesApplied || _nameSystem == null || _queuedSegmentInfos.Count == 0)
                 return;
 
             using var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
-            var currentEdges = edgeArray
-                .Where(entity => !_baselineRoadEdges.Contains(entity))
-                .OrderBy(entity => entity.Index)
-                .ThenBy(entity => entity.Version)
-                .ToList();
-
-            if (currentEdges.Count == 0)
+            if (edgeArray.Length == 0)
                 return;
 
-            if (_nameSystemNamesField.GetValue(_nameSystem) is IDictionary<Entity, string> names)
+            var newEdges = new List<Entity>();
+            foreach (var entity in edgeArray)
             {
-                var assignments = Math.Min(currentEdges.Count, _queuedSegmentNames.Count);
-                for (var i = 0; i < assignments; i++)
-                {
-                    var roadName = _queuedSegmentNames[i];
-                    if (string.IsNullOrWhiteSpace(roadName))
-                        continue;
+                if (!_baselineRoadEdges.Contains(entity))
+                    newEdges.Add(entity);
+            }
 
-                    var entity = currentEdges[i];
-                    names[entity] = roadName;
-                    if (!EntityManager.HasComponent<CustomName>(entity))
+            if (newEdges.Count == 0)
+                return;
+
+            var edgeLookup = GetComponentLookup<Edge>(true);
+            var nodeLookup = GetComponentLookup<Node>(true);
+
+            var cellSize = 5f;
+            var spatialIndex = new NativeParallelMultiHashMap<int, int>(_queuedSegmentInfos.Count, Allocator.Temp);
+
+            for (var i = 0; i < _queuedSegmentInfos.Count; i++)
+            {
+                var cellKey = SpatialCellKey(_queuedSegmentInfos[i].MidPoint, cellSize);
+                spatialIndex.Add(cellKey, i);
+            }
+
+            var matchedSegments = new NativeParallelHashSet<int>(_queuedSegmentInfos.Count, Allocator.Temp);
+            var namedTargets = new HashSet<Entity>();
+            var namedCount = 0;
+            var proxCheckCount = 0;
+            var proxMissCount = 0;
+            var dirMismatchCount = 0;
+
+            foreach (var edgeEntity in newEdges)
+            {
+                if (!edgeLookup.HasComponent(edgeEntity))
+                    continue;
+
+                var edge = edgeLookup[edgeEntity];
+                var hasStart = nodeLookup.HasComponent(edge.m_Start);
+                var hasEnd = nodeLookup.HasComponent(edge.m_End);
+                if (!hasStart || !hasEnd)
+                    continue;
+
+                var startPos = nodeLookup[edge.m_Start].m_Position;
+                var endPos = nodeLookup[edge.m_End].m_Position;
+                var edgeMid = (startPos + endPos) * 0.5f;
+                var edgeDir = math.normalizesafe(endPos - startPos, new float3(0f, 0f, 1f));
+
+                var cellKey = SpatialCellKey(edgeMid, cellSize);
+                var bestDist = float.MaxValue;
+                var bestIndex = -1;
+
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    for (var dz = -1; dz <= 1; dz++)
                     {
-                        EntityManager.AddComponentData(entity, default(CustomName));
+                        var neighborPos = edgeMid + new float3(dx * cellSize, 0f, dz * cellSize);
+                        var neighborKey = SpatialCellKey(neighborPos, cellSize);
+                        if (spatialIndex.TryGetFirstValue(neighborKey, out var segIndex, out var iterator))
+                        {
+                            do
+                            {
+                                if (matchedSegments.Contains(segIndex))
+                                    continue;
+
+                                var queuedInfo = _queuedSegmentInfos[segIndex];
+                                var queuedDir = math.normalizesafe(
+                                    queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
+                                var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+
+                                const float minDirDot = 0.5f;
+                                if (dirDot < minDirDot)
+                                {
+                                    dirMismatchCount++;
+                                    continue;
+                                }
+
+                                var dist = math.distancesq(queuedInfo.MidPoint, edgeMid);
+                                if (dist < bestDist)
+                                {
+                                    bestDist = dist;
+                                    bestIndex = segIndex;
+                                }
+                            }
+                            while (spatialIndex.TryGetNextValue(out segIndex, ref iterator));
+                        }
                     }
                 }
 
-                if (_queuedSegmentNames.Count != currentEdges.Count)
+                if (bestIndex < 0)
                 {
-                    Mod.log.Warn(
-                        $"Applied road names to {Math.Min(currentEdges.Count, _queuedSegmentNames.Count)} of {currentEdges.Count} generated road edges. " +
-                        $"Queued names: {_queuedSegmentNames.Count}.");
+                    proxMissCount++;
+                    continue;
                 }
 
-                _roadNamesApplied = true;
+                matchedSegments.Add(bestIndex);
+                var roadName = _queuedSegmentInfos[bestIndex].Name;
+                if (!string.IsNullOrWhiteSpace(roadName))
+                {
+                    var targetEntity = ResolveRoadNameTarget(edgeEntity);
+                    if (namedTargets.Add(targetEntity))
+                    {
+                        PendingNames.Add((targetEntity, roadName));
+                        proxCheckCount++;
+                    }
+                }
+                namedCount++;
             }
-            else
+
+            _roadNamesApplied = true;
+            Mod.log.Info(
+                $"Deferred {proxCheckCount} road names for SetCustomName on aggregates (UIUpdate). " +
+                $"{namedCount} total edge matches, {proxMissCount} unmatched edges, " +
+                $"{dirMismatchCount} direction mismatches skipped. " +
+                $"{newEdges.Count} new edges, {_queuedSegmentInfos.Count} queued segments.");
+
+            spatialIndex.Dispose();
+            matchedSegments.Dispose();
+        }
+
+        internal void ApplyPendingNames()
+        {
+            if (_nameSystem == null || PendingNames.Count == 0)
+                return;
+
+            var appliedCount = 0;
+            var errorCount = 0;
+            var chunkEntities = new HashSet<Entity>();
+
+            foreach (var (entity, name) in PendingNames)
             {
-                Mod.log.Warn("Unable to access NameSystem name cache while applying road names.");
+                var targetEntity = ResolveRoadNameTarget(entity);
+                if (!EntityManager.Exists(targetEntity) || string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                try
+                {
+                    _nameSystem.SetCustomName(targetEntity, name);
+
+                    if (EntityManager.HasComponent<CustomName>(targetEntity))
+                    {
+                        EntityManager.SetComponentData(targetEntity, new CustomName());
+                    }
+                    else
+                    {
+                        EntityManager.AddComponentData(targetEntity, new CustomName());
+                    }
+
+                    if (EntityManager.HasComponent<Updated>(targetEntity))
+                        EntityManager.SetComponentData(targetEntity, new Updated());
+                    else
+                        EntityManager.AddComponentData(targetEntity, new Updated());
+
+                    chunkEntities.Add(targetEntity);
+                    appliedCount++;
+                }
+                catch (Exception ex)
+                {
+                    errorCount++;
+                    if (errorCount <= 5)
+                        Mod.log.Warn($"SetCustomName failed for entity {targetEntity}: {ex.Message}");
+                }
+            }
+
+            MarkChunksDirty(chunkEntities);
+
+            Mod.log.Info(
+                $"Applied {appliedCount} road names to aggregate entities (SetCustomName + CustomName + Updated + BatchesUpdated). " +
+                $"{errorCount} errors.");
+            PendingNames.Clear();
+        }
+
+        private void MarkChunksDirty(HashSet<Entity> entities)
+        {
+            foreach (var entity in entities)
+            {
+                if (!EntityManager.Exists(entity))
+                    continue;
+                if (EntityManager.HasComponent<BatchesUpdated>(entity))
+                    EntityManager.SetComponentData(entity, new BatchesUpdated());
+                else
+                    EntityManager.AddComponentData(entity, new BatchesUpdated());
             }
         }
+
+
+
+        private static int SpatialCellKey(float3 position, float cellSize)
+        {
+            var cx = (int)math.floor(position.x / cellSize);
+            var cz = (int)math.floor(position.z / cellSize);
+            return (int)math.hash(new int2(cx, cz));
+        }
+
+        private Entity ResolveRoadNameTarget(Entity entity)
+        {
+            if (!EntityManager.Exists(entity))
+                return entity;
+
+            if (EntityManager.HasComponent<Aggregate>(entity))
+                return entity;
+
+            if (EntityManager.HasComponent<Aggregated>(entity))
+            {
+                var aggregated = EntityManager.GetComponentData<Aggregated>(entity);
+                if (EntityManager.Exists(aggregated.m_Aggregate))
+                    return aggregated.m_Aggregate;
+            }
+
+            return entity;
+        }
+
+#if DEBUG
+        internal string TryValidateNames()
+        {
+            if (!_roadNamesApplied || _nameSystem == null)
+                return "Validation: names not yet applied.";
+
+            var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
+            var newEdges = new List<Entity>();
+            foreach (var entity in edgeArray)
+            {
+                if (!_baselineRoadEdges.Contains(entity))
+                    newEdges.Add(entity);
+            }
+            edgeArray.Dispose();
+
+            var totalNewEdges = newEdges.Count;
+            var namedCount = 0;
+            var unnamedCount = 0;
+            var samples = new List<string>();
+            var seenTargets = new HashSet<Entity>();
+
+            foreach (var entity in newEdges)
+            {
+                var targetEntity = ResolveRoadNameTarget(entity);
+                if (!seenTargets.Add(targetEntity))
+                    continue;
+
+                if (_nameSystem.TryGetCustomName(targetEntity, out var name) && !string.IsNullOrWhiteSpace(name))
+                {
+                    namedCount++;
+                    if (samples.Count < 20)
+                        samples.Add(name);
+                }
+                else
+                {
+                    unnamedCount++;
+                }
+            }
+
+            var unique = samples.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var sampleStr = unique.Count > 0
+                ? string.Join(", ", unique.Take(10).Select(n => $"\"{EscapeJson(n)}\""))
+                : "(none)";
+
+            var queuedTotal = _queuedSegmentInfos.Count;
+            var queuedNonEmpty = _queuedSegmentInfos.Count(n => !string.IsNullOrWhiteSpace(n.Name));
+            var baselineEdgeCount = _baselineRoadEdges.Count;
+
+            var result = $"Validation: {totalNewEdges} new edges ({baselineEdgeCount} baseline), " +
+                         $"{namedCount} named, {unnamedCount} unnamed. " +
+                         $"Queued: {queuedTotal} total, {queuedNonEmpty} non-empty. " +
+                         $"Samples: {sampleStr}";
+            Mod.log.Info(result);
+            return result;
+        }
+#endif
 
         private bool ShouldGenerateWay(OsmWay way)
         {
@@ -548,14 +822,50 @@ namespace cs2_osm_importer
                    _activeGenerateOptions.HighwayTypes.Contains(way.Highway);
         }
 
-        private Entity GetPrefabForHighwayType(string highwayType)
+        private Entity GetPrefabForHighwayType(string highwayType, int lanes)
         {
             if (string.IsNullOrWhiteSpace(highwayType))
                 return _prefabEntity;
 
+            if (lanes > 0)
+            {
+                var laneKey = $"{highwayType}:{lanes}";
+                if (_laneSpecificPrefabEntities.TryGetValue(laneKey, out var laneCached))
+                    return laneCached;
+
+                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes);
+                if (laneMatch != Entity.Null)
+                {
+                    _laneSpecificPrefabEntities[laneKey] = laneMatch;
+                    Mod.log.Info(
+                        $"Selected prefab '{DescribePrefab(laneMatch)}' for highway type '{highwayType}' " +
+                        $"with {lanes} lanes.");
+                    return laneMatch;
+                }
+
+                Mod.log.Info(
+                    $"No lane-specific prefab match for highway type '{highwayType}' with {lanes} lanes. " +
+                    "Falling back to type-only selection.");
+            }
+
             if (_highwayPrefabEntities.TryGetValue(highwayType, out var cached))
                 return cached;
 
+            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0);
+            if (typeMatch != Entity.Null)
+            {
+                _highwayPrefabEntities[highwayType] = typeMatch;
+                return typeMatch;
+            }
+
+            _highwayPrefabEntities[highwayType] = _prefabEntity;
+            _highwayPrefabNames[highwayType] = _prefabName;
+            Mod.log.Warn($"No dedicated prefab found for highway type '{highwayType}'. Falling back to '{_prefabName}'.");
+            return _prefabEntity;
+        }
+
+        private Entity TryFindPrefabForHighwayType(string highwayType, int lanes)
+        {
             var candidates = GetRoadPrefabCandidates().ToList();
             var preferredNames = GetPreferredPrefabNames(highwayType);
 
@@ -563,19 +873,66 @@ namespace cs2_osm_importer
             {
                 var match = candidates.FirstOrDefault(p =>
                     IsSuitableRoadPrefabName(p.name, highwayType) &&
-                    p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0);
+                    p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    (lanes <= 0 || ParsePrefabLaneCount(p.name) == lanes));
                 if (match != null && _prefabSystem.TryGetEntity(match, out var entity))
                 {
-                    _highwayPrefabEntities[highwayType] = entity;
-                    _highwayPrefabNames[highwayType] = match.name;
+                    if (lanes <= 0)
+                        _highwayPrefabNames[highwayType] = match.name;
                     return entity;
                 }
             }
 
-            _highwayPrefabEntities[highwayType] = _prefabEntity;
-            _highwayPrefabNames[highwayType] = _prefabName;
-            Mod.log.Warn($"No dedicated prefab found for highway type '{highwayType}'. Falling back to '{_prefabName}'.");
-            return _prefabEntity;
+            return Entity.Null;
+        }
+
+        private static int ParsePrefabLaneCount(string prefabName)
+        {
+            if (string.IsNullOrWhiteSpace(prefabName))
+                return 0;
+
+            var parts = prefabName.Split(new[] { ' ', '-', '_', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length - 1; i++)
+            {
+                if (!parts[i + 1].Equals("lane", StringComparison.OrdinalIgnoreCase) &&
+                    !parts[i + 1].Equals("lanes", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var word = parts[i].Trim().ToLowerInvariant();
+                switch (word)
+                {
+                    case "one": return 1;
+                    case "two": return 2;
+                    case "three": return 3;
+                    case "four": return 4;
+                    case "five": return 5;
+                    case "six": return 6;
+                    case "seven": return 7;
+                    case "eight": return 8;
+                    case "nine": return 9;
+                    case "ten": return 10;
+                }
+
+                if (int.TryParse(word, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedCount) && parsedCount > 0)
+                    return parsedCount;
+            }
+
+            return 0;
+        }
+
+        private string DescribeQueuedLaneCounts()
+        {
+            if (_queuedSegmentInfos.Count == 0)
+                return "none";
+
+            var groups = _queuedSegmentInfos
+                .GroupBy(info => info.Lanes)
+                .OrderBy(g => g.Key <= 0 ? int.MaxValue : g.Key)
+                .Select(g => g.Key > 0 ? $"{g.Key}-lane: {g.Count()}" : $"unknown: {g.Count()}");
+
+            return string.Join(", ", groups);
         }
 
         private IEnumerable<NetPrefab> GetRoadPrefabCandidates()

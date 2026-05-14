@@ -51,7 +51,9 @@ namespace cs2_osm_importer
     {
         public long Id { get; set; }
         public string Name { get; set; } = string.Empty;
+        public string Ref { get; set; } = string.Empty;
         public string Highway { get; set; } = string.Empty;
+        public int Lanes { get; set; }
         public bool UsesStructuralElevation { get; set; }
         public float BaseElevationOffsetMeters { get; set; }
         public int InclineDirection { get; set; }

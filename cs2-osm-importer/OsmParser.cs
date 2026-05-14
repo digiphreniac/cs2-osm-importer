@@ -185,6 +185,9 @@ namespace cs2_osm_importer
             var isCutting = false;
             var inclineDirection = 0;
             var inclinePercent = 0f;
+            var hasExplicitLaneCount = false;
+            var forwardLaneCount = 0;
+            var backwardLaneCount = 0;
             var tags = wayElement.SelectNodes("tag");
 
             if (tags != null)
@@ -198,6 +201,21 @@ namespace cs2_osm_importer
                         way.Highway = value;
                     else if (key == "name")
                         way.Name = value;
+                    else if (key == "ref")
+                        way.Ref = value;
+                    else if (key == "lanes" && TryReadLaneCount(value, out var parsedLaneCount))
+                    {
+                        way.Lanes = parsedLaneCount;
+                        hasExplicitLaneCount = true;
+                    }
+                    else if (key == "lanes:forward" && TryReadLaneCount(value, out var parsedForwardLaneCount))
+                    {
+                        forwardLaneCount = parsedForwardLaneCount;
+                    }
+                    else if (key == "lanes:backward" && TryReadLaneCount(value, out var parsedBackwardLaneCount))
+                    {
+                        backwardLaneCount = parsedBackwardLaneCount;
+                    }
                     else if (key == "bridge")
                         isBridge = IsTruthy(value);
                     else if (key == "tunnel")
@@ -224,6 +242,9 @@ namespace cs2_osm_importer
 
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
+
+            if (!hasExplicitLaneCount && (forwardLaneCount > 0 || backwardLaneCount > 0))
+                way.Lanes = forwardLaneCount + backwardLaneCount;
 
             way.BaseElevationOffsetMeters = EstimateBaseElevationOffset(
                 hasLayer,
@@ -284,6 +305,23 @@ namespace cs2_osm_importer
             if (sampleHeight == null)
                 Simplify(way.Points, Math.Max(0f, options.SimplifyToleranceMeters * options.ScaleFactor));
             return way.Points.Count >= 2;
+        }
+
+        private static bool TryReadLaneCount(string value, out int laneCount)
+        {
+            laneCount = 0;
+
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            var parts = value.Split(new[] { ';', ',', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                if (int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out laneCount) && laneCount > 0)
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool TryReadSupportedRoadWay(XmlElement wayElement, out string highway, out bool isArea)
