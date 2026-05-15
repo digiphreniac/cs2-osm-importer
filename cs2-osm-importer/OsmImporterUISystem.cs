@@ -29,7 +29,6 @@ namespace cs2_osm_importer
 
             _importSystem = World.GetOrCreateSystemManaged<OsmImportSystem>();
             _editorToolUISystem = World.GetOrCreateSystemManaged<EditorToolUISystem>();
-            RegisterEditorTool();
 
             _status = new ValueBinding<string>(Mod.Id, "importStatus", "Ready.", ValueWriters.Create<string>());
             _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
@@ -49,6 +48,18 @@ namespace cs2_osm_importer
             AddBinding(new ValueBinding<bool>(Mod.Id, "isDebugMode", true));
             AddBinding(new TriggerBinding<string>(Mod.Id, "tryValidate", TryValidateRoadNames, ValueReaders.Create<string>()));
 #endif
+        }
+
+        protected override void OnGamePreload(Colossal.Serialization.Entities.Purpose purpose, Game.GameMode mode)
+        {
+            // UISystemBase's preload path can touch an uninitialized system state during editor startup.
+            // We only need the bindings after the UI world is live.
+        }
+
+        protected override void OnStartRunning()
+        {
+            base.OnStartRunning();
+            RegisterEditorTool();
         }
 
         private void RegisterEditorTool()

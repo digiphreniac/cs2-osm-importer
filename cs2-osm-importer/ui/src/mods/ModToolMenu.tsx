@@ -25,6 +25,105 @@ const ROAD_TYPES = [
 ];
 const DEFAULT_SELECTED_ROAD_TYPES = [...ROAD_TYPES];
 
+type RoadTypeMetadata = {
+  displayName: string;
+  description: string;
+  icon: string;
+};
+
+const ROAD_TYPE_METADATA: Record<string, RoadTypeMetadata> = {
+  motorway: {
+    displayName: "Motorway",
+    description: "High-capacity, access-controlled road for long-distance traffic.",
+    icon: "Media/Game/Icons/Highways.svg",
+  },
+  trunk: {
+    displayName: "Trunk",
+    description: "Major intercity road that carries important through traffic.",
+    icon: "Media/Game/Icons/HighwayTwoway4lanes.svg",
+  },
+  primary: {
+    displayName: "Primary",
+    description: "Main road connecting important towns, districts, and hubs.",
+    icon: "Media/Game/Icons/MediumRoadDivided.svg",
+  },
+  secondary: {
+    displayName: "Secondary",
+    description: "Significant connector between smaller towns and city districts.",
+    icon: "Media/Game/Icons/MediumRoad.svg",
+  },
+  tertiary: {
+    displayName: "Tertiary",
+    description: "Local connector that feeds traffic into higher-order roads.",
+    icon: "Media/Game/Icons/SmallRoads.svg",
+  },
+  unclassified: {
+    displayName: "Unclassified",
+    description: "Minor public road used for general local access.",
+    icon: "Media/Game/Icons/SmallRoad.svg",
+  },
+  residential: {
+    displayName: "Residential",
+    description: "Neighborhood street serving homes and local access.",
+    icon: "Media/Game/Icons/SmallRoadAsymmetric.svg",
+  },
+  service: {
+    displayName: "Service",
+    description: "Access road for buildings, parking, depots, and utilities.",
+    icon: "Media/Game/Icons/RoadsServices.svg",
+  },
+  living_street: {
+    displayName: "Living street",
+    description: "Low-speed shared street where pedestrians have priority.",
+    icon: "Media/Game/Icons/PedestrianStreet.svg",
+  },
+  road: {
+    displayName: "Road",
+    description: "Generic road tag used when no more specific type is known.",
+    icon: "Media/Game/Icons/Roads.svg",
+  },
+  motorway_link: {
+    displayName: "Motorway link",
+    description: "Ramp or connector linking a motorway to nearby roads.",
+    icon: "Media/Game/Icons/HighwayOneway2lanes.svg",
+  },
+  trunk_link: {
+    displayName: "Trunk link",
+    description: "Connector road feeding traffic into or out of a trunk route.",
+    icon: "Media/Game/Icons/HighwayOneway2lanes.svg",
+  },
+  primary_link: {
+    displayName: "Primary link",
+    description: "Connector between primary roads and the wider network.",
+    icon: "Media/Game/Icons/MediumRoadOneway.svg",
+  },
+  secondary_link: {
+    displayName: "Secondary link",
+    description: "Connector between secondary roads and local streets.",
+    icon: "Media/Game/Icons/SmallRoad.svg",
+  },
+  tertiary_link: {
+    displayName: "Tertiary link",
+    description: "Connector between tertiary roads and nearby local access.",
+    icon: "Media/Game/Icons/SmallRoadOneway1lane.svg",
+  },
+};
+
+const getRoadTypeBadgeText = (roadType: string) => {
+  const parts = (roadType || "")
+    .split("_")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) return "?";
+
+  return parts
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+};
+
 type ToolSettings = {
   path: string;
   tolerance: string;
@@ -748,6 +847,7 @@ export const ModToolMenu = () => {
                 </div>
                 <div style={roadTypeGridStyle}>
                   {sortedRoadTypes.map((roadType) => {
+                    const metadata = ROAD_TYPE_METADATA[roadType];
                     const isGenerated = generatedRoadTypes.includes(roadType);
                     const isGenerating = generatingRoadTypes.includes(roadType);
                     const count = roadTypeCounts[roadType] ?? 0;
@@ -759,22 +859,28 @@ export const ModToolMenu = () => {
                         type="button"
                         onClick={() => toggleRoadType(roadType)}
                         disabled={isDisabled}
-                        style={roadTypeToggleStyle(isSelected, isDisabled)}
+                        title={metadata?.description ?? roadType}
+                        aria-label={`${metadata?.displayName ?? roadType}: ${metadata?.description ?? roadType}`}
+                        style={roadTypeTileStyle(isSelected, isDisabled)}
                       >
-                        <span style={roadTypeNameStyle}>{roadType}</span>
-                        {(isGenerating || isGenerated) && (
-                          <span style={roadTypeStatusIconStyle}>
-                            <Icon
-                              src={isGenerating ? GENERATING_ICON : GENERATED_ICON}
-                              tinted={false}
-                              className={styles.roadStatusIcon}
-                            />
+                        <div style={roadTypeTileHeaderStyle}>
+                          <span style={roadTypeTileBadgeStyle(isSelected, isDisabled)}>
+                            {getRoadTypeBadgeText(roadType)}
                           </span>
-                        )}
-                        <span style={roadTypeCountStyle}>{hasLoadedData ? count : "-"}</span>
+                          {(isGenerating || isGenerated) && (
+                            <span style={roadTypeStatusBadgeStyle(isGenerating)}>
+                              {isGenerating ? "GEN" : "DONE"}
+                            </span>
+                          )}
+                        </div>
+                        <span style={roadTypeTitleStyle}>{metadata?.displayName ?? roadType}</span>
+                        <span style={roadTypeCountStyle}>{hasLoadedData ? `${count} loaded` : "-"}</span>
+                        <span style={roadTypeDescriptionStyle}>{metadata?.description ?? roadType}</span>
                       </button>
                     );
                   })}
+                </div>
+                <div style={roadTypeActionsStyle}>
                   <button
                     type="button"
                     onClick={() => {
@@ -794,10 +900,10 @@ export const ModToolMenu = () => {
                       !canGenerateRoads || activeRoadTypes.length === 0,
                     )}
                   >
-                    <span style={roadTypeNameStyle}>
+                    <span style={roadTypeTitleStyle}>
                       {allSelectableRoadTypesSelected ? "Deselect all" : "Select all"}
                     </span>
-                    <span style={roadTypeCountStyle}>{activeRoadTypeRoadCount}</span>
+                    <span style={roadTypeCountStyle}>{activeRoadTypeRoadCount} total loaded ways</span>
                   </button>
                 </div>
               </>
@@ -1135,50 +1241,85 @@ const sanitizeImportFieldInput = (
 };
 
 const roadTypeGridStyle = {
-  display: "flex",
-  flexWrap: "wrap" as const,
-  alignItems: "stretch",
-  overflowY: "visible" as const,
-  position: "relative" as const,
-  zIndex: 1,
-  padding: 10,
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: 10,
+  padding: 12,
   marginTop: 12,
   backgroundColor: "rgba(30, 40, 55, 0.55)",
   border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: 4,
 };
 
-const roadTypeToggleStyle = (selected: boolean, disabled: boolean) => ({
+const roadTypeTileStyle = (selected: boolean, disabled: boolean) => ({
   display: "flex",
-  alignItems: "center",
-  width: "49%",
-  marginRight: "1%",
-  marginBottom: 6,
-  minHeight: 22,
-  padding: "4px 6px",
-  position: "relative" as const,
-  zIndex: 1,
+  flexDirection: "column" as const,
+  alignItems: "stretch",
+  justifyContent: "space-between",
+  minHeight: 168,
+  padding: 14,
   backgroundColor: selected ? "rgba(64, 130, 90, 0.55)" : "rgba(18, 28, 42, 0.7)",
   border: `1px solid ${selected ? "rgba(104, 190, 130, 0.9)" : "rgba(255,255,255,0.12)"}`,
   borderRadius: 4,
-  fontSize: 11,
+  fontSize: 12,
   color: disabled ? "rgba(216, 224, 234, 0.55)" : "#d8e0ea",
   cursor: disabled ? "default" : "pointer",
+  textAlign: "left" as const,
+  boxSizing: "border-box" as const,
+  boxShadow: disabled ? "none" : "inset 0 0 0 1px rgba(255,255,255,0.03)",
 });
 
-const roadTypeNameStyle = {
-  flex: "1 1 auto",
+const roadTypeTileHeaderStyle = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  marginBottom: 10,
+};
+
+const roadTypeTileBadgeStyle = (selected: boolean, disabled: boolean) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: 36,
+  height: 36,
+  padding: "0 8px",
+  borderRadius: 999,
+  backgroundColor: disabled
+    ? "rgba(255,255,255,0.08)"
+    : selected
+      ? "rgba(104, 190, 130, 0.22)"
+      : "rgba(255,255,255,0.1)",
+  border: `1px solid ${disabled ? "rgba(255,255,255,0.08)" : selected ? "rgba(104, 190, 130, 0.45)" : "rgba(255,255,255,0.12)"}`,
+  color: disabled ? "rgba(216, 224, 234, 0.55)" : "#ffffff",
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+});
+
+const roadTypeTitleStyle = {
+  display: "block",
+  fontWeight: 700,
+  lineHeight: 1.15,
+  marginBottom: 4,
   overflow: "hidden",
   textOverflow: "ellipsis",
-  marginRight: 7,
 };
 
 const roadTypeCountStyle = {
-  flex: "0 0 auto",
-  minWidth: 30,
-  textAlign: "right" as const,
-  color: "rgba(225, 232, 240, 0.85)",
-  marginRight: 7,
+  display: "block",
+  marginBottom: 6,
+  color: "rgba(225, 232, 240, 0.88)",
+};
+
+const roadTypeDescriptionStyle = {
+  display: "block",
+  flex: "1 1 auto",
+  color: "rgba(225, 232, 240, 0.72)",
+  lineHeight: 1.3,
+};
+
+const roadTypeActionsStyle = {
+  marginTop: 8,
 };
 
 const sectionToggleIconStyle = {
@@ -1191,15 +1332,22 @@ const sectionToggleIconStyle = {
   marginLeft: 8,
 };
 
-const roadTypeStatusIconStyle = {
+const roadTypeStatusBadgeStyle = (active: boolean) => ({
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 10,
-  height: 10,
+  minWidth: 48,
+  height: 22,
+  padding: "0 8px",
   flex: "0 0 auto",
-  marginRight: 7,
-};
+  borderRadius: 999,
+  backgroundColor: active ? "rgba(90, 130, 230, 0.28)" : "rgba(76, 175, 80, 0.22)",
+  border: `1px solid ${active ? "rgba(90, 130, 230, 0.6)" : "rgba(76, 175, 80, 0.5)"}`,
+  color: "#f4f7fb",
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: 0.4,
+});
 
 const fieldIconStyle = {
   display: "inline-flex",
@@ -1211,13 +1359,10 @@ const fieldIconStyle = {
 const selectAllToggleStyle = (selected: boolean, disabled: boolean) => ({
   display: "flex",
   alignItems: "center",
-  width: "49%",
-  marginRight: "1%",
-  marginBottom: 6,
-  minHeight: 22,
-  padding: "4px 6px",
-  position: "relative" as const,
-  zIndex: 1,
+  justifyContent: "space-between",
+  width: "100%",
+  marginTop: 8,
+  padding: "8px 10px",
   backgroundColor: disabled
     ? "rgba(20, 24, 32, 0.82)"
     : selected

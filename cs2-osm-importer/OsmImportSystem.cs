@@ -87,6 +87,8 @@ namespace cs2_osm_importer
         internal bool HasGeneratedAssets { get; private set; }
         internal bool HasLoadedData => _document != null && _document.Ways.Count > 0;
         internal string RoadTypeCountsJson { get; private set; } = "{}";
+        internal IReadOnlyDictionary<string, int> RoadTypeCountsByType { get; private set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        internal static IReadOnlyDictionary<string, int> SharedRoadTypeCountsByType { get; private set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         protected override void OnCreate()
         {
@@ -96,16 +98,12 @@ namespace cs2_osm_importer
 
             _groundHeightSystem = World.GetOrCreateSystemManaged<GroundHeightSystem>();
             _terrainSystem = World.GetOrCreateSystemManaged<TerrainSystem>();
-            Enabled = false;
         }
 
         protected override void OnUpdate()
         {
             if (!IsImporting)
-            {
-                Enabled = false;
                 return;
-            }
 
             switch (_phase)
             {
@@ -129,19 +127,20 @@ namespace cs2_osm_importer
             if (IsImporting)
                 return false;
 
-            if (string.IsNullOrWhiteSpace(options.Path) || !File.Exists(options.Path))
-            {
-                _document = null;
-                RoadTypeCountsJson = "{}";
-                SetStatus("Enter a valid OSM file path.");
-                return true;
-            }
+                if (string.IsNullOrWhiteSpace(options.Path) || !File.Exists(options.Path))
+                {
+                    _document = null;
+                    RoadTypeCountsJson = "{}";
+                    RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    SharedRoadTypeCountsByType = RoadTypeCountsByType;
+                    SetStatus("Enter a valid OSM file path.");
+                    return true;
+                }
 
             _pendingLoadOptions = options;
             IsImporting = true;
             _phase = WorkPhase.LoadData;
             SetStatus("OSM file path accepted. Loading...");
-            Enabled = true;
             Mod.log.Info($"Queued OSM load for '{options.Path}'");
             return true;
         }
@@ -154,7 +153,6 @@ namespace cs2_osm_importer
             if (_document == null || _document.Ways.Count == 0)
             {
                 SetStatus("Load OSM data before generating roads.");
-                Enabled = true;
                 return true;
             }
 
@@ -162,7 +160,6 @@ namespace cs2_osm_importer
             IsImporting = true;
             _phase = WorkPhase.QueueDefinitions;
             SetStatus("Preparing road generation...");
-            Enabled = true;
             Mod.log.Info($"Queued OSM road generation for selected types: {SelectedTypesLabel(options)}");
             PrepareGeneration();
             return true;
@@ -176,7 +173,6 @@ namespace cs2_osm_importer
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
             SetStatus("Deleting roads...");
-            Enabled = true;
             return true;
         }
 
@@ -210,6 +206,8 @@ namespace cs2_osm_importer
 
                 if (_document.Ways.Count == 0)
                 {
+                    RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    SharedRoadTypeCountsByType = RoadTypeCountsByType;
                     Complete("No supported OSM highway ways were found.");
                     return;
                 }
@@ -219,6 +217,10 @@ namespace cs2_osm_importer
                     .OrderByDescending(g => g.Count())
                     .Select(g => $"{g.Key}: {g.Count()}"));
                 Mod.log.Info($"Loaded OSM highway type counts: {typeSummary}");
+                RoadTypeCountsByType = _document.Ways
+                    .GroupBy(way => way.Highway, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+                SharedRoadTypeCountsByType = RoadTypeCountsByType;
                 RoadTypeCountsJson = BuildRoadTypeCountsJson(_document);
 
                 Complete($"Loaded {_document.Ways.Count} OSM ways. Select road types and click Generate.");
@@ -228,6 +230,8 @@ namespace cs2_osm_importer
                 Mod.log.Error(ex);
                 _document = null;
                 RoadTypeCountsJson = "{}";
+                RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                SharedRoadTypeCountsByType = RoadTypeCountsByType;
                 Complete($"Failed to load OSM data: {ex.Message}");
             }
         }

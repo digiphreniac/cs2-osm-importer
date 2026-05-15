@@ -15,7 +15,6 @@ namespace cs2_osm_importer
         protected override void OnCreate()
         {
             base.OnCreate();
-            Enabled = false;
         }
 
         protected override void OnStartRunning()
