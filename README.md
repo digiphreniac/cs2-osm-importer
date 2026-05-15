@@ -27,7 +27,7 @@ You can open the OSM Importer tool panel by clicking on the button ... ***TODO !
 ### 4. Import the OSM Data
 Using the OSM Importer tool panel, input the path to the OSM data file from step 1 and import the data. \
 
-> [!INFO]
+> [!NOTE]
 > The import process will take some time and likely freeze your game for 10+ seconds.
 
 ### 5. Generate roads

@@ -1,21 +1,64 @@
 ﻿<Publish>
 	<!--Id must be set in order to update existed mod. it is not required for publishing mod for the first time-->
-	<ModId Value="cs2-osm-importer" />
+	<ModId Value="144297" /> <!-- "cs2-osm-importer" -->
 	<!--Name of the mod to display to players-->
 	<DisplayName Value="OSM Importer" />
 	<!--Short description of the mod-->
-	<ShortDescription Value="This is a short description" />
+	<ShortDescription Value="Import OpenStreetMap data and generate roads into Cities Skylines 2" />
 	<!--Long description of the mod. Single line or multi line. Supports minimal markdown subset-->
 	<!--LongDescription Value="This is a long description" /-->
 	<LongDescription>
-This is a long description
+**NOTE:** This mod is a work in progress! The roads (especially roads that are elevated) are generating incorrectly.
+		
+<br />
+
+A **Cities: Skylines 2** mod that imports real-world road network data from **[OpenStreetMap](https://wiki.openstreetmap.org/wiki/About_OpenStreetMap) (OSM)** XML files and procedurally generates the corresponding road networks inside the game world.
+
+
+## Usage
+### 1. Dowload OSM Data
+OSM data can be downloaded from a variety of sources. \
+I recommend you download OSM from [terraining.ateliernonta.com](https://terraining.ateliernonta.com) (more detailed instructions at the [GitHub repo](https://github.com/nonta1234/terraining-heightmap-generator#readme)).
+
+#### Note
+It is recommended that you also download heightmap data at the website [terraining.ateliernonta.com](https://terraining.ateliernonta.com).
+
+[Learn more about heightmaps in Cities Skylines II](https://cs2.paradoxwikis.com/Map_Creation#Heightmaps)
+
+
+### 2. Launch editor
+This mod was built to work with the in-game editor mode.
+
+### 3. Open OSM Importer Tool
+<!-- TODO - finish this -->
+You can open the OSM Importer tool panel by clicking on the button ... ***TODO ! ! ! FINISH ! ! ! TODO***
+
+### 4. Import the OSM Data
+Using the OSM Importer tool panel, input the path to the OSM data file from step 1 and import the data.
+
+#### Note
+The import process will take some time and likely freeze your game for 10+ seconds.
+
+### 5. Generate roads
+Wait patiently while roads generate and enjoy!
+Once you've imported the data, you can select different subsets of the roads to generate.
+
+#### Note
+Be aware the road generation can take some time. \
+Areas with lots of roads will require a lot of compute power.
 	</LongDescription>
 	<!--Thumbnail-->
 	<Thumbnail Value="Properties/Thumbnail.png" />
 	<!--Screenshot, can be set multiple times-->
 	<Screenshot Value="" />
+	<Screenshot Value="Properties/ToolScreen1.png" />
+	<Screenshot Value="Properties/ToolScreen2.png" />
+	<Screenshot Value="Properties/Example-Seattle_before.png" />
+	<Screenshot Value="Properties/Example-Seattle_after.png" />
+	<Screenshot Value="Properties/Example-Seattle_before.png" />
+	<Screenshot Value="Properties/Seattle.png" />
 	<!--Tag, can be set multiple times-->
-	<Tag Value="" />
+	<Tag Value="Code Mod" />
 	<!--Link to the forum post where the mod can be discussed-->
 	<ForumLink Value="" />
 	<!--Version of the mod-->
@@ -23,15 +66,15 @@ This is a long description
 	<!--Recommended version of the base game to use the mod-->
 	<GameVersion Value="1.0.*" />
 	<!--Dependency for the mod, can be set multiple times-->
-	<Dependency Id="UnifiedIconLibrary" />
+	<Dependency Id="74417" /> <!-- "UnifiedIconLibrary" -->
 	<!--Required DLC, can be set multiple times. Supported values are "Landmark Buildings", "San Fransisco Set", "Beach Properties", "Urban Promenades", "Modern Architecture"-->
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
-	<ChangeLog Value="" />
+	<ChangeLog Value="Updated description" />
 	<!--<ChangeLog>
 	</ChangeLog>-->
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
-	<ExternalLink Type="" Url="" />
+	<ExternalLink Type="github" Url="https://github.com/digiphreniac/cs2-osm-importer" />
 	<!--Supported values Public, Private, Unlisted-->
 	<AccessLevel Value="Public" />
 </Publish>
