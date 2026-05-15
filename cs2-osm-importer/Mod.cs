@@ -1,4 +1,5 @@
 ﻿using Colossal.IO.AssetDatabase;
+using Colossal.Localization;
 using Colossal.Logging;
 
 using Game;
@@ -11,16 +12,18 @@ namespace cs2_osm_importer
     public class Mod : IMod
     {
         public const string Id = "cs2-osm-importer";
-        public const string ToolId = "OsmImportTool";
+        public const string ToolId = "OSM Importer Tool";
 
         public static ILog log = LogManager.GetLogger($"{nameof(cs2_osm_importer)}.{nameof(Mod)}")
             .SetShowsErrorsInUI(true);
 
         public const string ButtonActionName = "ToggleOSMImporterTool";
-        
+
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
+
+            GameManager.instance.localizationManager.AddSource("en-US", OsmLocalization.CreateEnglishSource());
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
                 log.Info($"Current mod asset at {asset.path}");

@@ -7,6 +7,7 @@ namespace cs2_osm_importer
     public partial class OsmImportToolSystem : ToolBaseSystem
     {
         public override string toolID => Mod.ToolId;
+        // public override string toolID => "OSM Import Tool";
 
         public override PrefabBase GetPrefab() => null;
 

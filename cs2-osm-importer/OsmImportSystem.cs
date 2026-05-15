@@ -82,13 +82,19 @@ namespace cs2_osm_importer
         private WorkPhase _phase = WorkPhase.Idle;
 
         internal bool IsImporting { get; private set; }
-        private string _status = "Ready.";
+        private string _status = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         internal string Status => _status;
         internal bool HasGeneratedAssets { get; private set; }
         internal bool HasLoadedData => _document != null && _document.Ways.Count > 0;
         internal string RoadTypeCountsJson { get; private set; } = "{}";
         internal IReadOnlyDictionary<string, int> RoadTypeCountsByType { get; private set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         internal static IReadOnlyDictionary<string, int> SharedRoadTypeCountsByType { get; private set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        private static string L(string key, string fallback) => OsmLocalization.T(key, fallback);
+
+        private static string LF(string key, string fallback, params object[] args) => OsmLocalization.F(key, fallback, args);
+
+        private static string DisplayHighwayType(string highwayType) => OsmLocalization.GetRoadTypeName(highwayType, highwayType);
 
         protected override void OnCreate()
         {
@@ -127,20 +133,20 @@ namespace cs2_osm_importer
             if (IsImporting)
                 return false;
 
-                if (string.IsNullOrWhiteSpace(options.Path) || !File.Exists(options.Path))
-                {
-                    _document = null;
-                    RoadTypeCountsJson = "{}";
-                    RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                    SharedRoadTypeCountsByType = RoadTypeCountsByType;
-                    SetStatus("Enter a valid OSM file path.");
-                    return true;
-                }
+            if (!IsValidOsmPath(options.Path))
+            {
+                _document = null;
+                RoadTypeCountsJson = "{}";
+                RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                SharedRoadTypeCountsByType = RoadTypeCountsByType;
+                SetStatus(L("OsmImporter.Status.InvalidPath", "The selected file path is not a valid OSM file."));
+                return true;
+            }
 
             _pendingLoadOptions = options;
             IsImporting = true;
             _phase = WorkPhase.LoadData;
-            SetStatus("OSM file path accepted. Loading...");
+            SetStatus(L("OsmImporter.Status.LoadStarted", "OSM file path accepted. Loading..."));
             Mod.log.Info($"Queued OSM load for '{options.Path}'");
             return true;
         }
@@ -152,14 +158,14 @@ namespace cs2_osm_importer
 
             if (_document == null || _document.Ways.Count == 0)
             {
-                SetStatus("Load OSM data before generating roads.");
+                SetStatus(L("OsmImporter.Status.LoadBeforeGenerate", "Load OSM data before generating roads."));
                 return true;
             }
 
             _pendingGenerateOptions = options;
             IsImporting = true;
             _phase = WorkPhase.QueueDefinitions;
-            SetStatus("Preparing road generation...");
+            SetStatus(L("OsmImporter.Status.GeneratingPrepared", "Preparing road generation..."));
             Mod.log.Info($"Queued OSM road generation for selected types: {SelectedTypesLabel(options)}");
             PrepareGeneration();
             return true;
@@ -172,7 +178,7 @@ namespace cs2_osm_importer
 
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
-            SetStatus("Deleting roads...");
+            SetStatus(L("OsmImporter.Status.DeletingRoads", "Deleting roads..."));
             return true;
         }
 
@@ -182,14 +188,14 @@ namespace cs2_osm_importer
             {
                 _activeOptions = _pendingLoadOptions;
                 _pendingLoadOptions = null;
-                SetStatus("Parsing OSM file...");
+                SetStatus(L("OsmImporter.Status.ParsingFile", "Parsing OSM file..."));
                 Mod.log.Info($"Parsing OSM file '{_activeOptions.Path}'");
 
                 if (string.IsNullOrWhiteSpace(_activeOptions.Path) || !File.Exists(_activeOptions.Path))
                 {
                     _document = null;
                     RoadTypeCountsJson = "{}";
-                    Complete("Enter a valid OSM file path.");
+                    Complete(L("OsmImporter.Status.InvalidPath", "The selected file path is not a valid OSM file."));
                     return;
                 }
 
@@ -208,7 +214,7 @@ namespace cs2_osm_importer
                 {
                     RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                     SharedRoadTypeCountsByType = RoadTypeCountsByType;
-                    Complete("No supported OSM highway ways were found.");
+                    Complete(L("OsmImporter.Status.NoSupportedWays", "No supported OSM highway ways were found."));
                     return;
                 }
 
@@ -223,7 +229,7 @@ namespace cs2_osm_importer
                 SharedRoadTypeCountsByType = RoadTypeCountsByType;
                 RoadTypeCountsJson = BuildRoadTypeCountsJson(_document);
 
-                Complete($"Loaded {_document.Ways.Count} OSM ways. Select road types and click Generate.");
+                Complete(LF("OsmImporter.Status.LoadComplete", "Loaded {0} OSM ways. Select road types and click Generate.", _document.Ways.Count));
             }
             catch (Exception ex)
             {
@@ -232,7 +238,7 @@ namespace cs2_osm_importer
                 RoadTypeCountsJson = "{}";
                 RoadTypeCountsByType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 SharedRoadTypeCountsByType = RoadTypeCountsByType;
-                Complete($"Failed to load OSM data: {ex.Message}");
+                Complete(LF("OsmImporter.Status.LoadFailed", "Failed to load OSM data: {0}", ex.Message));
             }
         }
 
@@ -245,7 +251,7 @@ namespace cs2_osm_importer
 
                 if (!TryGetRoadPrefab(_activeOptions?.RoadPrefabName ?? string.Empty, out var prefab, out _prefabEntity))
                 {
-                    Complete("No usable road prefab was found. Open a city and try again.");
+                    Complete(L("OsmImporter.Status.NoUsablePrefab", "No usable road prefab was found. Open a city and try again."));
                     return;
                 }
 
@@ -255,7 +261,7 @@ namespace cs2_osm_importer
                 _laneSpecificPrefabEntities.Clear();
                 if (!_prefabSystem.TryGetComponentData(prefab, out _netData))
                 {
-                    Complete($"Road prefab '{prefab.name}' has no NetData.");
+                    Complete(LF("OsmImporter.Status.PrefabMissingNetData", "Road prefab '{0}' has no NetData.", prefab.name));
                     return;
                 }
 
@@ -278,14 +284,14 @@ namespace cs2_osm_importer
                 _roadNamesApplied = false;
                 Mod.log.Info($"Baseline road edge count before OSM road generation: {_baselineEdgeCount}");
                 SetStatus(_generationTypeOrder.Count > 0
-                    ? $"Generating \"{_generationTypeOrder[0]}\" roads (1/{_generationTypeOrder.Count})"
-                    : "Generating selected OSM roads...");
+                    ? LF("OsmImporter.Status.GenerationProgress", "Generating \"{0}\" roads ({1}/{2})", _generationTypeOrder[0], 1, _generationTypeOrder.Count)
+                    : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 _loggedFirstQueuedSegment = false;
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete($"Failed to prepare road generation: {ex.Message}");
+                Complete(LF("OsmImporter.Status.PrepareGenerationFailed", "Failed to prepare road generation: {0}", ex.Message));
             }
         }
 
@@ -359,11 +365,11 @@ namespace cs2_osm_importer
                 }
 
                 var currentTypeLabel = _typeIndex < _generationTypeOrder.Count
-                    ? _generationTypeOrder[_typeIndex]
+                    ? DisplayHighwayType(_generationTypeOrder[_typeIndex])
                     : string.Empty;
                 SetStatus(!string.IsNullOrWhiteSpace(currentTypeLabel)
-                    ? $"Generating \"{currentTypeLabel}\" roads ({Math.Min(_typeIndex + 1, _generationTypeOrder.Count)}/{_generationTypeOrder.Count})"
-                    : "Generating selected OSM roads...");
+                    ? LF("OsmImporter.Status.GenerationProgress", "Generating \"{0}\" roads ({1}/{2})", currentTypeLabel, Math.Min(_typeIndex + 1, _generationTypeOrder.Count), _generationTypeOrder.Count)
+                    : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 if (_importedSegments - _lastLoggedSegments >= 1000)
                 {
                     _lastLoggedSegments = _importedSegments;
@@ -388,13 +394,13 @@ namespace cs2_osm_importer
                             $"min={FormatPoint(_document.Min)}, max={FormatPoint(_document.Max)}");
                     }
                     _phase = WorkPhase.WaitForGameApply;
-                    SetStatus($"Queued {_importedSegments} road definitions. Waiting for CS2 to generate roads...");
+                    SetStatus(LF("OsmImporter.Status.QueuedGeneration", "Queued {0} road definitions. Waiting for CS2 to generate roads...", _importedSegments));
                 }
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete($"Failed to generate roads: {ex.Message}");
+                Complete(LF("OsmImporter.Status.GenerateFailed", "Failed to generate roads: {0}", ex.Message));
             }
         }
 
@@ -408,8 +414,8 @@ namespace cs2_osm_importer
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
                 SetStatus(pendingDefinitions > 0
-                    ? $"Waiting for CS2 road generation... {consumedDefinitions}/{_importedSegments} definitions consumed"
-                    : $"CS2 consumed {_importedSegments} OSM definitions. Verifying generated roads...");
+                    ? LF("OsmImporter.Status.WaitingForCS2", "Waiting for CS2 road generation... {0}/{1} definitions consumed", consumedDefinitions, _importedSegments)
+                    : LF("OsmImporter.Status.CS2Verifying", "CS2 consumed {0} OSM definitions. Verifying generated roads...", _importedSegments));
 
                 if (pendingDefinitions != _lastPendingDefinitions && _applyWaitFrames - _lastWaitLogFrame >= 300)
                 {
@@ -435,8 +441,8 @@ namespace cs2_osm_importer
                         ? string.Join(", ", uniqueNames.Take(50).Select(n => $"\"{EscapeJson(n)}\""))
                         : "(none)";
                     var message = generatedRoadEdges > 0
-                        ? $"CS2 consumed {_importedSegments} road definitions; detected {generatedRoadEdges} new road edges. Import bounds: {ShortBounds(_document)}. Names: {namesPreview}"
-                        : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified. Names: {namesPreview}";
+                        ? LF("OsmImporter.Status.GeneratedRoads", "CS2 consumed {0} road definitions; detected {1} new road edges. Import bounds: {2}. Names: {3}", _importedSegments, generatedRoadEdges, ShortBounds(_document), namesPreview)
+                        : LF("OsmImporter.Status.GeneratedRoadsUnknown", "CS2 consumed {0} road definitions. Generated road count could not be verified. Names: {1}", _importedSegments, namesPreview);
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
@@ -447,8 +453,8 @@ namespace cs2_osm_importer
                 if (_applyWaitFrames >= MaxApplyWaitFrames)
                 {
                     var message = pendingDefinitions > 0
-                        ? $"Queued {_importedSegments} road definitions; CS2 consumed {consumedDefinitions} so far. Leave the editor running or try fewer road types."
-                        : $"CS2 consumed {_importedSegments} road definitions. Generated road count could not be verified.";
+                        ? LF("OsmImporter.Status.WaitingContinue", "Queued {0} road definitions; CS2 consumed {1} so far. Leave the editor running or try fewer road types.", _importedSegments, consumedDefinitions)
+                        : LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
 
                     Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
                     HasGeneratedAssets = true;
@@ -458,7 +464,7 @@ namespace cs2_osm_importer
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete($"Failed while waiting for generated roads: {ex.Message}");
+                Complete(LF("OsmImporter.Status.WaitingFailed", "Failed while waiting for generated roads: {0}", ex.Message));
             }
         }
 
@@ -469,13 +475,13 @@ namespace cs2_osm_importer
                 var deletedEdges = MarkRoadEdgesDeleted();
                 var deletedNodes = MarkRoadNodesDeleted();
                 HasGeneratedAssets = false;
-                Complete($"Marked {deletedEdges} road edges and {deletedNodes} road nodes for deletion.");
+                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} road edges and {1} road nodes for deletion.", deletedEdges, deletedNodes));
                 Mod.log.Info(Status);
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete($"Failed to delete roads: {ex.Message}");
+                Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete roads: {0}", ex.Message));
             }
         }
 
@@ -492,6 +498,17 @@ namespace cs2_osm_importer
         private void SetStatus(string message)
         {
             _status = message;
+        }
+
+        private static bool IsValidOsmPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            if (!File.Exists(path))
+                return false;
+
+            return string.Equals(Path.GetExtension(path), ".osm", StringComparison.OrdinalIgnoreCase);
         }
 
         private Entity CreateNetCourseDefinition(float3 start, float3 end, Entity prefabEntity, float elevationOffset = 0f)
@@ -777,7 +794,7 @@ namespace cs2_osm_importer
         internal string TryValidateNames()
         {
             if (!_roadNamesApplied || _nameSystem == null)
-                return "Validation: names not yet applied.";
+                return L("OsmImporter.Status.ValidationNotApplied", "Validation: names not yet applied.");
 
             var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
             var newEdges = new List<Entity>();
@@ -821,10 +838,7 @@ namespace cs2_osm_importer
             var queuedNonEmpty = _queuedSegmentInfos.Count(n => !string.IsNullOrWhiteSpace(n.Name));
             var baselineEdgeCount = _baselineRoadEdges.Count;
 
-            var result = $"Validation: {totalNewEdges} new edges ({baselineEdgeCount} baseline), " +
-                         $"{namedCount} named, {unnamedCount} unnamed. " +
-                         $"Queued: {queuedTotal} total, {queuedNonEmpty} non-empty. " +
-                         $"Samples: {sampleStr}";
+            var result = LF("OsmImporter.Status.ValidationSummary", "Validation: {0} new edges ({1} baseline), {2} named, {3} unnamed. Queued: {4} total, {5} non-empty. Samples: {6}", totalNewEdges, baselineEdgeCount, namedCount, unnamedCount, queuedTotal, queuedNonEmpty, sampleStr);
             Mod.log.Info(result);
             return result;
         }
@@ -940,12 +954,14 @@ namespace cs2_osm_importer
         private string DescribeQueuedLaneCounts()
         {
             if (_queuedSegmentInfos.Count == 0)
-                return "none";
+                return L("OsmImporter.Value.None", "none");
 
             var groups = _queuedSegmentInfos
                 .GroupBy(info => info.Lanes)
                 .OrderBy(g => g.Key <= 0 ? int.MaxValue : g.Key)
-                .Select(g => g.Key > 0 ? $"{g.Key}-lane: {g.Count()}" : $"unknown: {g.Count()}");
+                .Select(g => g.Key > 0
+                    ? LF("OsmImporter.Format.LaneCount", "{0}-lane: {1}", g.Key, g.Count())
+                    : LF("OsmImporter.Format.UnknownLaneCount", "unknown: {0}", g.Count()));
 
             return string.Join(", ", groups);
         }
@@ -1180,22 +1196,22 @@ namespace cs2_osm_importer
                 $"size {size.x:F1}m x {size.z:F1}m, elevation y={document.ElevationMeters:F1}m");
         }
 
-        private string DocumentBoundsMessage() => $"Projected import bounds: {ShortBounds(_document)}";
+        private string DocumentBoundsMessage() => LF("OsmImporter.Bounds.ProjectedImport", "Projected import bounds: {0}", ShortBounds(_document));
 
         private static string ShortBounds(OsmDocument document)
         {
             if (document == null || !document.HasBounds)
-                return "unknown";
+                return L("OsmImporter.Value.Unknown", "unknown");
 
             var size = document.Max - document.Min;
-            return $"{size.x:F0}m x {size.z:F0}m, y={document.ElevationMeters:F1}m";
+            return LF("OsmImporter.Bounds.Short", "{0:F0}m x {1:F0}m, y={2:F1}m", size.x, size.z, document.ElevationMeters);
         }
 
         private static string SelectedTypesLabel(OsmGenerateOptions options)
         {
             return options == null || options.HighwayTypes.Count == 0
-                ? "all loaded types"
-                : string.Join(", ", options.HighwayTypes.OrderBy(t => t));
+                ? L("OsmImporter.Value.AllLoadedTypes", "all loaded types")
+                : string.Join(", ", options.HighwayTypes.OrderBy(t => t).Select(DisplayHighwayType));
         }
 
         private static string BuildRoadTypeCountsJson(OsmDocument document)

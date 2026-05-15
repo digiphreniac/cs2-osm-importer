@@ -18,7 +18,7 @@ namespace cs2_osm_importer
         private ValueBinding<string> _roadTypeCounts;
         private OsmImportSystem _importSystem;
         private EditorToolUISystem _editorToolUISystem;
-        private string _lastStatus = "Ready.";
+        private string _lastStatus = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         private bool _lastImporting;
         private bool _lastHasLoadedData;
         private string _lastRoadTypeCounts = "{}";
@@ -30,7 +30,7 @@ namespace cs2_osm_importer
             _importSystem = World.GetOrCreateSystemManaged<OsmImportSystem>();
             _editorToolUISystem = World.GetOrCreateSystemManaged<EditorToolUISystem>();
 
-            _status = new ValueBinding<string>(Mod.Id, "importStatus", "Ready.", ValueWriters.Create<string>());
+            _status = new ValueBinding<string>(Mod.Id, "importStatus", OsmLocalization.T("OsmImporter.Status.Ready", "Ready."), ValueWriters.Create<string>());
             _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
             _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
             _hasLoadedData = new ValueBinding<bool>(Mod.Id, "hasLoadedData", false, ValueWriters.Create<bool>());
@@ -93,7 +93,7 @@ namespace cs2_osm_importer
                 MaxWays = options.MaxWays <= 0 ? 10000 : options.MaxWays
             }))
             {
-                _status.Update("An OSM import is already running.");
+                _status.Update(OsmLocalization.T("OsmImporter.Status.LoadInProgress", "An OSM import is already running."));
                 return;
             }
 
@@ -108,7 +108,7 @@ namespace cs2_osm_importer
 
             if (!_importSystem.GenerateRoads(options))
             {
-                _status.Update("An OSM operation is already running.");
+                _status.Update(OsmLocalization.T("OsmImporter.Status.OperationInProgress", "An OSM operation is already running."));
                 return;
             }
 
@@ -119,7 +119,7 @@ namespace cs2_osm_importer
         {
             if (!_importSystem.DeleteAllRoads())
             {
-                _status.Update("An OSM operation is already running.");
+                _status.Update(OsmLocalization.T("OsmImporter.Status.OperationInProgress", "An OSM operation is already running."));
                 return;
             }
 
