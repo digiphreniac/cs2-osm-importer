@@ -54,8 +54,6 @@ The UI registers React components into the game UI and communicates with the C# 
 - This project was based off of the [Cities Skylines OSM Import mod](https://steamcommunity.com/sharedfiles/filedetails/?id=1957515502).
 
 
-<!--
-### Support
-TODO 
-Section here for support, bugs, feedback
--->
+
+### Feedback
+Report bugs, request features, or provide general feedback by [creating an issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues/new/choose).

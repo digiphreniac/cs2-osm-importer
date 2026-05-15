@@ -46,6 +46,10 @@ Once you've imported the data, you can select different subsets of the roads to 
 #### Note
 Be aware the road generation can take some time. \
 Areas with lots of roads will require a lot of compute power.
+
+
+### Feedback 
+Report bugs, request features, or provide general feedback by [creating an issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues/new/choose).
 	</LongDescription>
 	<!--Thumbnail-->
 	<Thumbnail Value="Properties/Thumbnail.png" />
@@ -70,7 +74,7 @@ Areas with lots of roads will require a lot of compute power.
 	<!--Required DLC, can be set multiple times. Supported values are "Landmark Buildings", "San Fransisco Set", "Beach Properties", "Urban Promenades", "Modern Architecture"-->
 	<RequiredDLC Value="" />
 	<!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
-	<ChangeLog Value="Updated description" />
+	<ChangeLog Value="Add feedback/support links" />
 	<!--<ChangeLog>
 	</ChangeLog>-->
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
