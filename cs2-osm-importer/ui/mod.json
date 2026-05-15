@@ -1,0 +1,8 @@
+{
+  "id": "cs2-osm-importer",
+  "author": "digiphreniac",
+  "version": "1.0.0",
+  "dependencies": [
+    "UnifiedIconLibrary"
+  ]
+}

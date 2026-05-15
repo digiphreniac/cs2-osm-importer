@@ -3,3 +3,13 @@ obj/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+.idea/
+.opencode/
+AGENTS.md
+ai_tools/
+opencode.json
+*.sln.DotSettings.user
+*.user
+cs2-osm-importer/Library/
+cs2-osm-importer/ui/node_modules/
+Mono.Cecil*.dll
