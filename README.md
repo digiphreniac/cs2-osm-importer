@@ -47,6 +47,18 @@ The mod follows CS2's **ECS pattern** with a custom `OsmImportDefinition` compon
 
 The UI registers React components into the game UI and communicates with the C# backend through `ValueBinding`/`TriggerBinding` data bindings.
 
+### Version bumping
+
+Use `bump-version.ps1` to update both the mod publish version and `ui/mod.json` in one step:
+
+```powershell
+./bump-version.ps1 patch
+./bump-version.ps1 minor
+./bump-version.ps1 major
+```
+
+If you omit the argument, it defaults to `patch`.
+
 ## References
 
 - [Cities Skylines II Modding Toolchain](https://cs2.paradoxwikis.com/Modding_Toolchain) - helpful for getting modding development environment
