@@ -107,6 +107,10 @@ namespace cs2_osm_importer
             { "OsmImporter.Bounds.Short", "{0:F0}m x {1:F0}m, y={2:F1}m" },
             { "OsmImporter.Bounds.ProjectedOSM", "Projected OSM bounds: center lat/lon {0:F6}, {1:F6}; x {2:F1}..{3:F1}m, z {4:F1}..{5:F1}m, size {6:F1}m x {7:F1}m, elevation y={8:F1}m" },
 
+            { "IntersectionThreshold", "Intersection threshold (m)" },
+            { "IntersectionThreshold.Description", "Maximum XZ distance from a road for a pillar to be considered intersecting (1-20m)." },
+            { "OsmImporter.Status.PillarCleanupComplete", "Pillar cleanup: {0}/{1} intersecting pillars removed." },
+            { "OsmImporter.Status.PillarCleanupFailed", "Failed during pillar intersection cleanup: {0}" },
             { "OsmImporter.RoadType.Motorway.Name", "Motorway" },
             { "OsmImporter.RoadType.Motorway.Description", "High-capacity, access-controlled road for long-distance traffic." },
             { "OsmImporter.RoadType.Trunk.Name", "Trunk" },

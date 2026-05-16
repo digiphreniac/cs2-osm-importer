@@ -32,6 +32,7 @@ namespace cs2_osm_importer
     internal sealed class OsmGenerateOptions
     {
         public HashSet<string> HighwayTypes { get; } = new HashSet<string>();
+        public float IntersectionThresholdMeters { get; set; } = 8f;
     }
 
     internal sealed class OsmImportResult

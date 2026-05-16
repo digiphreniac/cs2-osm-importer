@@ -106,12 +106,14 @@ namespace cs2_osm_importer
         private double _coveredDepthValue = 5d;
         private double _embankmentElevationValue = 3d;
         private double _cuttingDepthValue = 3d;
+        private double _intersectionThresholdValue = 8d;
         private string _statusText = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         private int _fieldVersion;
         private bool _wasPanelActive;
         private bool _showLoadConfirmation;
         private bool _isPathInvalid;
         private bool _advancedSettingsExpanded = true;
+        private bool _generateAdvancedSettingsExpanded = true;
 
         protected override void OnCreate()
         {
@@ -438,6 +440,33 @@ namespace cs2_osm_importer
                 level = Label.Level.SubTitle,
             };
 
+            var generateAdvancedSettings = new EditorSection
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.AdvancedSettings", "Advanced settings"),
+                expanded = _generateAdvancedSettingsExpanded,
+                children = new List<IWidget>
+                {
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("IntersectionThreshold", "Intersection threshold (m)"),
+                        tooltip = OsmLocalization.T("IntersectionThreshold.Description", "Maximum XZ distance from a road for a pillar to be considered intersecting (1-20m)."),
+                        min = 1d,
+                        max = 20d,
+                        step = 0.5,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _intersectionThresholdValue, SetIntersectionThresholdValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new Button
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Button.ResetDefaults", "Reset to defaults"),
+                        action = ResetGenerateDefaults,
+                    },
+                },
+            };
+
             var generateSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
@@ -449,6 +478,7 @@ namespace cs2_osm_importer
                     supportedTypesLabel,
                     _generateRoadTypeSelectionWidget,
                     _waysToCreateLabel,
+                    generateAdvancedSettings,
                     _generateButton,
                     _deleteButton,
                 },
@@ -522,7 +552,10 @@ namespace cs2_osm_importer
         private void GenerateRoads()
         {
             var selectedTypes = GetSelectedGenerateRoadTypes().ToList();
-            var options = new OsmGenerateOptions();
+            var options = new OsmGenerateOptions
+            {
+                IntersectionThresholdMeters = (float)_intersectionThresholdValue,
+            };
             foreach (var roadType in selectedTypes)
             {
                 options.HighwayTypes.Add(roadType);
@@ -565,6 +598,14 @@ namespace cs2_osm_importer
             SetEmbankmentElevationValue(3d);
             SetCuttingDepthValue(3d);
             ResetAdvancedSettingsSection();
+            UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
+        }
+
+        private void ResetGenerateDefaults()
+        {
+            SetIntersectionThresholdValue(8d);
+            BumpFieldVersion();
+            children = BuildChildren();
             UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
         }
 
@@ -818,6 +859,12 @@ namespace cs2_osm_importer
         private void SetCuttingDepthValue(double value)
         {
             _cuttingDepthValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetIntersectionThresholdValue(double value)
+        {
+            _intersectionThresholdValue = value;
             BumpFieldVersion();
         }
 

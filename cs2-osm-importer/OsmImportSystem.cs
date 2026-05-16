@@ -8,6 +8,7 @@ using Colossal.Mathematics;
 using Game;
 using Game.Common;
 using Game.Net;
+using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.UI;
@@ -23,6 +24,7 @@ namespace cs2_osm_importer
         private const int MaxSegmentsPerFrame = 128;
         private const int MaxApplyWaitFrames = 3600;
         private const float MinSegmentLengthMeters = 1f;
+        private const int PillarWaitFrameThreshold = 60;
 
         private enum WorkPhase
         {
@@ -30,6 +32,7 @@ namespace cs2_osm_importer
             LoadData,
             QueueDefinitions,
             WaitForGameApply,
+            RemoveIntersectingPillars,
             DeleteRoads
         }
 
@@ -58,6 +61,8 @@ namespace cs2_osm_importer
         private int _applyWaitFrames;
         private int _baselineEdgeCount;
         private HashSet<Entity> _baselineRoadEdges = new HashSet<Entity>();
+        private int _pillarWaitFrames;
+        private HashSet<Entity> _baselinePillarEntities = new HashSet<Entity>();
         private int _lastPendingDefinitions = -1;
         private int _lastWaitLogFrame;
         private bool _loggedFirstQueuedSegment;
@@ -121,6 +126,9 @@ namespace cs2_osm_importer
                     break;
                 case WorkPhase.WaitForGameApply:
                     WaitForGeneratedRoads();
+                    break;
+                case WorkPhase.RemoveIntersectingPillars:
+                    RemoveIntersectingPillars();
                     break;
                 case WorkPhase.DeleteRoads:
                     DeleteRoads();
@@ -281,6 +289,8 @@ namespace cs2_osm_importer
                 {
                     _baselineRoadEdges = edgeArray.ToHashSet();
                 }
+                _baselinePillarEntities = QueryPillarEntities().ToHashSet();
+                Mod.log.Info($"Baseline pillar entity count: {_baselinePillarEntities.Count}");
                 _queuedSegmentInfos.Clear();
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _roadNamesApplied = false;
@@ -448,7 +458,9 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
-                    Complete(message);
+                    SetStatus(message);
+                    _pillarWaitFrames = 0;
+                    _phase = WorkPhase.RemoveIntersectingPillars;
                     return;
                 }
 
@@ -460,7 +472,9 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
                     HasGeneratedAssets = true;
-                    Complete(message);
+                    SetStatus(message);
+                    _pillarWaitFrames = 0;
+                    _phase = WorkPhase.RemoveIntersectingPillars;
                 }
             }
             catch (Exception ex)
@@ -468,6 +482,227 @@ namespace cs2_osm_importer
                 Mod.log.Error(ex);
                 Complete(LF("OsmImporter.Status.WaitingFailed", "Failed while waiting for generated roads: {0}", ex.Message));
             }
+        }
+
+        private void RemoveIntersectingPillars()
+        {
+            try
+            {
+                _pillarWaitFrames++;
+
+                if (_pillarWaitFrames < PillarWaitFrameThreshold)
+                    return;
+
+                var allPillarEntities = QueryPillarEntities();
+                if (allPillarEntities == null || allPillarEntities.Count == 0)
+                {
+                    Mod.log.Info("No pillar entities found. Skipping pillar intersection check.");
+                    Complete(_status);
+                    return;
+                }
+
+                var newPillars = new List<Entity>();
+                foreach (var entity in allPillarEntities)
+                {
+                    if (!_baselinePillarEntities.Contains(entity))
+                        newPillars.Add(entity);
+                }
+
+                if (newPillars.Count == 0)
+                {
+                    Mod.log.Info("No new pillar entities found to check for intersection.");
+                    Complete(_status);
+                    return;
+                }
+
+                Mod.log.Info($"Found {newPillars.Count} new pillar entities (after baseline exclusion).");
+
+                var roadEdgePositions = GetGeneratedRoadEdgePositions();
+                if (roadEdgePositions.Length == 0)
+                {
+                    Mod.log.Info("No generated road edges found. Skipping pillar intersection check.");
+                    roadEdgePositions.Dispose();
+                    Complete(_status);
+                    return;
+                }
+
+                var cellSize = 5f;
+                var spatialIndex = new NativeParallelMultiHashMap<int, int>(roadEdgePositions.Length, Allocator.Temp);
+                for (var i = 0; i < roadEdgePositions.Length; i++)
+                {
+                    var mid = (roadEdgePositions[i].Start + roadEdgePositions[i].End) * 0.5f;
+                    spatialIndex.Add(SpatialCellKey(mid, cellSize), i);
+                    spatialIndex.Add(SpatialCellKey(roadEdgePositions[i].Start, cellSize), i);
+                    spatialIndex.Add(SpatialCellKey(roadEdgePositions[i].End, cellSize), i);
+                }
+
+                var threshold = (_activeGenerateOptions?.IntersectionThresholdMeters ?? 8f);
+                var thresholdSq = threshold * threshold;
+                var intersectingCount = 0;
+                var totalChecked = 0;
+                var failedPosCount = 0;
+
+                foreach (var pillarEntity in newPillars)
+                {
+                    if (!EntityManager.Exists(pillarEntity))
+                        continue;
+
+                    if (!TryGetPillarPosition(pillarEntity, out var pillarPos))
+                    {
+                        failedPosCount++;
+                        continue;
+                    }
+
+                    totalChecked++;
+                    var intersects = false;
+
+                    for (var dx = -1; dx <= 1 && !intersects; dx++)
+                    {
+                        for (var dz = -1; dz <= 1 && !intersects; dz++)
+                        {
+                            var neighborPos = pillarPos + new float3(dx * cellSize, 0f, dz * cellSize);
+                            var key = SpatialCellKey(neighborPos, cellSize);
+                            if (!spatialIndex.TryGetFirstValue(key, out var edgeIdx, out var it))
+                                continue;
+
+                            do
+                            {
+                                var edge = roadEdgePositions[edgeIdx];
+                                var closestSq = ClosestPointOnSegmentXZSq(pillarPos, edge.Start, edge.End);
+                                if (closestSq < thresholdSq)
+                                {
+                                    intersects = true;
+                                    break;
+                                }
+                            }
+                            while (spatialIndex.TryGetNextValue(out edgeIdx, ref it));
+                        }
+                    }
+
+                    if (intersects)
+                    {
+                        if (!EntityManager.HasComponent<Deleted>(pillarEntity))
+                        {
+                            EntityManager.AddComponentData(pillarEntity, new Deleted());
+                            EntityManager.AddComponentData(pillarEntity, new Updated());
+                        }
+                        intersectingCount++;
+                    }
+                }
+
+                spatialIndex.Dispose();
+                roadEdgePositions.Dispose();
+
+                Mod.log.Info(
+                    $"Pillar intersection cleanup: checked {totalChecked} pillars, " +
+                    $"{failedPosCount} failed position reads, " +
+                    $"deleted {intersectingCount} intersecting. Threshold: {threshold:F1}m");
+
+                Complete(LF("OsmImporter.Status.PillarCleanupComplete",
+                    "Pillar cleanup: {0}/{1} intersecting pillars removed.",
+                    intersectingCount, totalChecked));
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Error(ex);
+                Complete(LF("OsmImporter.Status.PillarCleanupFailed",
+                    "Failed during pillar intersection cleanup: {0}", ex.Message));
+            }
+        }
+
+        private List<Entity> QueryPillarEntities()
+        {
+            try
+            {
+                using var query = EntityManager.CreateEntityQuery(
+                    ComponentType.ReadOnly<Pillar>(),
+                    ComponentType.Exclude<Deleted>());
+                var entities = query.ToEntityArray(Allocator.Temp).ToList();
+                Mod.log.Info($"QueryPillarEntities found {entities.Count} total pillar entities (excluding Deleted).");
+                return entities;
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Warn($"QueryPillarEntities failed: {ex.Message}");
+                return new List<Entity>();
+            }
+        }
+
+        private bool TryGetPillarPosition(Entity pillarEntity, out float3 position)
+        {
+            position = float3.zero;
+
+            try
+            {
+                if (EntityManager.HasComponent<Game.Objects.Transform>(pillarEntity))
+                {
+                    var t = EntityManager.GetComponentData<Game.Objects.Transform>(pillarEntity);
+                    position = t.m_Position;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Warn($"Failed to get pillar position: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static float ClosestPointOnSegmentXZSq(float3 point, float3 a, float3 b)
+        {
+            var ab = new float2(b.x - a.x, b.z - a.z);
+            var ap = new float2(point.x - a.x, point.z - a.z);
+            var lenSq = math.lengthsq(ab);
+
+            if (lenSq < 0.0001f)
+                return math.lengthsq(ap);
+
+            var t = math.clamp(math.dot(ap, ab) / lenSq, 0f, 1f);
+            var closest = a + t * (b - a);
+            var dx = point.x - closest.x;
+            var dz = point.z - closest.z;
+            return dx * dx + dz * dz;
+        }
+
+        private struct RoadEdgePosition
+        {
+            public float3 Start;
+            public float3 End;
+        }
+
+        private NativeList<RoadEdgePosition> GetGeneratedRoadEdgePositions()
+        {
+            var result = new NativeList<RoadEdgePosition>(Allocator.Temp);
+            using var entities = GetEntityQuery(
+                ComponentType.ReadOnly<Edge>(),
+                ComponentType.ReadOnly<Road>(),
+                ComponentType.ReadOnly<PrefabRef>(),
+                ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
+
+            var edgeLookup = GetComponentLookup<Edge>(true);
+            var nodeLookup = GetComponentLookup<Node>(true);
+
+            foreach (var entity in entities)
+            {
+                if (_baselineRoadEdges.Contains(entity))
+                    continue;
+
+                if (!edgeLookup.HasComponent(entity))
+                    continue;
+
+                var edge = edgeLookup[entity];
+                if (!nodeLookup.HasComponent(edge.m_Start) || !nodeLookup.HasComponent(edge.m_End))
+                    continue;
+
+                result.Add(new RoadEdgePosition
+                {
+                    Start = nodeLookup[edge.m_Start].m_Position,
+                    End = nodeLookup[edge.m_End].m_Position
+                });
+            }
+
+            return result;
         }
 
         private void DeleteRoads()
