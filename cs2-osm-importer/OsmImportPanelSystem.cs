@@ -65,7 +65,7 @@ namespace cs2_osm_importer
         private Button _confirmLoadButton;
         private Button _cancelLoadButton;
         private PopupValueField<string> _pathField;
-        private EditorSection _importDataSection;
+        private ExpandableGroup _importDataSection;
         private Game.UI.Widgets.Group _roadTypesCheckboxGroup;
         private Game.UI.Widgets.Group _roadTypesGroup;
         private FloatSliderField _simplifyToleranceField;
@@ -88,6 +88,7 @@ namespace cs2_osm_importer
         private bool _wasPanelActive;
         private bool _showLoadConfirmation;
         private bool _isPathInvalid;
+        private bool _importDataSectionExpanded = true;
 
         protected override void OnCreate()
         {
@@ -124,8 +125,8 @@ namespace cs2_osm_importer
 
             if (_importSystem != null && _statusLabel != null)
             {
-                UpdateRoadTypeCounts();
                 UpdateImportSectionState();
+                UpdateRoadTypeCounts();
                 UpdateStatus(_importSystem.Status);
                 UpdateControlStates();
             }
@@ -265,10 +266,9 @@ namespace cs2_osm_importer
                 },
             };
 
-            _importDataSection = new EditorSection
+            _importDataSection = new ExpandableGroup(_importDataSectionExpanded)
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.ImportData", "Import data"),
-                expanded = true,
                 children = new List<IWidget>
                 {
                     new Label
@@ -502,7 +502,9 @@ namespace cs2_osm_importer
 
             if (_importSystem.HasLoadedData && !_lastHasLoadedData)
             {
+                _importDataSectionExpanded = false;
                 _importDataSection.expanded = false;
+                children = BuildChildren();
             }
 
             _lastHasLoadedData = _importSystem.HasLoadedData;
@@ -646,16 +648,22 @@ namespace cs2_osm_importer
             var rows = new List<IWidget>();
             _roadTypeTiles.Clear();
 
-            for (var i = 0; i < _roadTypesOrder.Count; i += 3)
+            var orderedRoadTypes = _roadTypesOrder
+                .OrderByDescending(GetRoadTypeCount)
+                .ThenBy(GetRoadTypeDisplayName)
+                .ThenBy(roadType => _roadTypesOrder.IndexOf(roadType))
+                .ToList();
+
+            for (var i = 0; i < orderedRoadTypes.Count; i += 3)
             {
                 var rowChildren = new List<IWidget>();
-                rowChildren.Add(BuildRoadTypeCell(_roadTypesOrder[i]));
+                rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i]));
 
-                if (i + 1 < _roadTypesOrder.Count)
-                    rowChildren.Add(BuildRoadTypeCell(_roadTypesOrder[i + 1]));
+                if (i + 1 < orderedRoadTypes.Count)
+                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 1]));
 
-                if (i + 2 < _roadTypesOrder.Count)
-                    rowChildren.Add(BuildRoadTypeCell(_roadTypesOrder[i + 2]));
+                if (i + 2 < orderedRoadTypes.Count)
+                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 2]));
 
                 rows.Add(CreateRow(rowChildren));
             }
@@ -799,6 +807,7 @@ namespace cs2_osm_importer
                 _roadTypeSelections[roadType] = true;
 
             var key = roadType;
+            var count = GetRoadTypeCount(roadType);
             return new ToggleField
             {
                 displayName = string.Empty,
@@ -806,6 +815,7 @@ namespace cs2_osm_importer
                     () => _roadTypeSelections.TryGetValue(key, out var value) && value,
                     value => SetRoadTypeSelection(key, value)),
                 valueVersion = () => _fieldVersion,
+                disabled = () => _importSystem != null && (_importSystem.IsImporting || _importSystem.HasGeneratedAssets || count <= 0),
             };
         }
 
