@@ -56,4 +56,5 @@ The UI registers React components into the game UI and communicates with the C# 
 
 
 ### Feedback
-Report bugs, request features, or provide general feedback by [creating an issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues/new/choose).
+Report bugs, request features, or provide general feedback by creating an [issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues). \
+Please look at the existing issues before creating one to avoid creating duplicates.

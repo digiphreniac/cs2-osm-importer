@@ -49,8 +49,9 @@ Be aware the road generation can take some time. \
 Areas with lots of roads will require a lot of compute power.
 
 
-### Feedback 
-Report bugs, request features, or provide general feedback by [creating an issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues/new/choose).
+### Feedback
+Report bugs, request features, or provide general feedback by creating an [issue on the Github repo](https://github.com/digiphreniac/cs2-osm-importer/issues). \
+Please look at the existing issues before creating one to avoid creating duplicates.
 	</LongDescription>
 	<!--Thumbnail-->
 	<Thumbnail Value="Properties/Thumbnail.png" />
@@ -80,6 +81,7 @@ Report bugs, request features, or provide general feedback by [creating an issue
 	</ChangeLog>-->
 	<!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
 	<ExternalLink Type="github" Url="https://github.com/digiphreniac/cs2-osm-importer" />
+	<ExternalLink Type="buymeacoffee" Url="https://buymeacoffee.com/digiphreniac" />
 	<!--Supported values Public, Private, Unlisted-->
-	<AccessLevel Value="Public" />
+	<AccessLevel Value="Unlisted" />
 </Publish>
