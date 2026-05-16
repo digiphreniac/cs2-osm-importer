@@ -208,6 +208,8 @@ namespace cs2_osm_importer
                     SampleTerrainHeight,
                     terrainOffset);
                 Mod.log.Info($"Parsed {_document.NodeCount} OSM nodes and {_document.Ways.Count} supported highway ways");
+                if (_document.InferredLaneCount > 0)
+                    Mod.log.Info($"Normalized {_document.InferredLaneCount} contiguous ways to inherit lane counts from connected segments.");
                 LogImportedBounds(_document);
 
                 if (_document.Ways.Count == 0)
@@ -599,8 +601,10 @@ namespace cs2_osm_importer
 
             for (var i = 0; i < _queuedSegmentInfos.Count; i++)
             {
-                var cellKey = SpatialCellKey(_queuedSegmentInfos[i].MidPoint, cellSize);
-                spatialIndex.Add(cellKey, i);
+                var queuedInfo = _queuedSegmentInfos[i];
+                spatialIndex.Add(SpatialCellKey(queuedInfo.MidPoint, cellSize), i);
+                spatialIndex.Add(SpatialCellKey(queuedInfo.StartPos, cellSize), i);
+                spatialIndex.Add(SpatialCellKey(queuedInfo.EndPos, cellSize), i);
             }
 
             var matchedSegments = new NativeParallelHashSet<int>(_queuedSegmentInfos.Count, Allocator.Temp);
@@ -609,6 +613,8 @@ namespace cs2_osm_importer
             var proxCheckCount = 0;
             var proxMissCount = 0;
             var dirMismatchCount = 0;
+            var globalFallbackCount = 0;
+            var unmatchedLogCount = 0;
 
             foreach (var edgeEntity in newEdges)
             {
@@ -626,50 +632,34 @@ namespace cs2_osm_importer
                 var edgeMid = (startPos + endPos) * 0.5f;
                 var edgeDir = math.normalizesafe(endPos - startPos, new float3(0f, 0f, 1f));
 
-                var cellKey = SpatialCellKey(edgeMid, cellSize);
-                var bestDist = float.MaxValue;
+                var bestEndpointScore = float.MaxValue;
+                var bestMidScore = float.MaxValue;
                 var bestIndex = -1;
 
-                for (var dx = -1; dx <= 1; dx++)
+                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, startPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, endPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, edgeMid, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+
+                if (bestIndex < 0)
                 {
-                    for (var dz = -1; dz <= 1; dz++)
+                    if (TryFindBestQueuedSegmentGlobally(startPos, endPos, edgeMid, edgeDir, matchedSegments, out var globalIndex, out var globalScore))
                     {
-                        var neighborPos = edgeMid + new float3(dx * cellSize, 0f, dz * cellSize);
-                        var neighborKey = SpatialCellKey(neighborPos, cellSize);
-                        if (spatialIndex.TryGetFirstValue(neighborKey, out var segIndex, out var iterator))
-                        {
-                            do
-                            {
-                                if (matchedSegments.Contains(segIndex))
-                                    continue;
-
-                                var queuedInfo = _queuedSegmentInfos[segIndex];
-                                var queuedDir = math.normalizesafe(
-                                    queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
-                                var dirDot = math.abs(math.dot(edgeDir, queuedDir));
-
-                                const float minDirDot = 0.5f;
-                                if (dirDot < minDirDot)
-                                {
-                                    dirMismatchCount++;
-                                    continue;
-                                }
-
-                                var dist = math.distancesq(queuedInfo.MidPoint, edgeMid);
-                                if (dist < bestDist)
-                                {
-                                    bestDist = dist;
-                                    bestIndex = segIndex;
-                                }
-                            }
-                            while (spatialIndex.TryGetNextValue(out segIndex, ref iterator));
-                        }
+                        bestIndex = globalIndex;
+                        bestEndpointScore = globalScore;
+                        globalFallbackCount++;
+                        if (globalFallbackCount <= 5)
+                            Mod.log.Info($"Global fallback matched edge {edgeEntity.Index}:{edgeEntity.Version} to '{_queuedSegmentInfos[bestIndex].Name}' with score {globalScore:F1}.");
                     }
                 }
 
                 if (bestIndex < 0)
                 {
                     proxMissCount++;
+                    if (unmatchedLogCount < 5)
+                    {
+                        unmatchedLogCount++;
+                        LogUnmatchedRoadEdge(spatialIndex, edgeEntity, startPos, endPos, edgeMid, edgeDir);
+                    }
                     continue;
                 }
 
@@ -691,7 +681,7 @@ namespace cs2_osm_importer
             Mod.log.Info(
                 $"Deferred {proxCheckCount} road names for SetCustomName on aggregates (UIUpdate). " +
                 $"{namedCount} total edge matches, {proxMissCount} unmatched edges, " +
-                $"{dirMismatchCount} direction mismatches skipped. " +
+                $"{dirMismatchCount} direction mismatches skipped, {globalFallbackCount} global fallbacks. " +
                 $"{newEdges.Count} new edges, {_queuedSegmentInfos.Count} queued segments.");
 
             spatialIndex.Dispose();
@@ -770,6 +760,193 @@ namespace cs2_osm_importer
             var cx = (int)math.floor(position.x / cellSize);
             var cz = (int)math.floor(position.z / cellSize);
             return (int)math.hash(new int2(cx, cz));
+        }
+
+        private void ConsiderQueuedSegmentMatches(
+            NativeParallelMultiHashMap<int, int> spatialIndex,
+            NativeParallelHashSet<int> matchedSegments,
+            float3 edgeStart,
+            float3 edgeEnd,
+            float3 centerPos,
+            float3 edgeMid,
+            float3 edgeDir,
+            float cellSize,
+            ref int bestIndex,
+            ref float bestEndpointScore,
+            ref float bestMidScore,
+            ref int dirMismatchCount)
+        {
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                for (var dz = -1; dz <= 1; dz++)
+                {
+                    var neighborPos = centerPos + new float3(dx * cellSize, 0f, dz * cellSize);
+                    var neighborKey = SpatialCellKey(neighborPos, cellSize);
+                    if (!spatialIndex.TryGetFirstValue(neighborKey, out var segIndex, out var iterator))
+                        continue;
+
+                    do
+                    {
+                        if (matchedSegments.Contains(segIndex))
+                            continue;
+
+                var queuedInfo = _queuedSegmentInfos[segIndex];
+                        var queuedDir = math.normalizesafe(
+                            queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
+                        var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+                        if (dirDot < 0.5f)
+                            dirMismatchCount++;
+
+                        var sameOrientationScore = math.distancesq(edgeStart, queuedInfo.StartPos) +
+                                           math.distancesq(edgeEnd, queuedInfo.EndPos);
+                var reversedOrientationScore = math.distancesq(edgeStart, queuedInfo.EndPos) +
+                                                math.distancesq(edgeEnd, queuedInfo.StartPos);
+                var endpointScore = math.min(sameOrientationScore, reversedOrientationScore);
+                var midScore = math.distancesq(queuedInfo.MidPoint, edgeMid);
+                var directionPenalty = (1f - math.clamp(dirDot, 0f, 1f)) * 25f;
+                var totalScore = endpointScore + midScore * 0.25f + directionPenalty;
+
+                if (totalScore < bestEndpointScore ||
+                    (math.abs(totalScore - bestEndpointScore) <= 0.0001f && midScore < bestMidScore))
+                {
+                    bestEndpointScore = totalScore;
+                    bestMidScore = midScore;
+                    bestIndex = segIndex;
+                }
+                    }
+                    while (spatialIndex.TryGetNextValue(out segIndex, ref iterator));
+                }
+            }
+        }
+
+        private void LogUnmatchedRoadEdge(
+            NativeParallelMultiHashMap<int, int> spatialIndex,
+            Entity edgeEntity,
+            float3 startPos,
+            float3 endPos,
+            float3 edgeMid,
+            float3 edgeDir)
+        {
+            var candidates = new List<string>();
+            var cellSize = 5f;
+            for (var dx = -1; dx <= 1 && candidates.Count < 5; dx++)
+            {
+                for (var dz = -1; dz <= 1 && candidates.Count < 5; dz++)
+                {
+                    var neighborKey = SpatialCellKey(edgeMid + new float3(dx * cellSize, 0f, dz * cellSize), cellSize);
+                    if (!TryGetQueuedSegmentCandidates(spatialIndex, neighborKey, startPos, endPos, edgeMid, edgeDir, candidates))
+                        continue;
+                }
+            }
+
+            if (candidates.Count == 0)
+                AddGlobalQueuedCandidateSummary(startPos, endPos, edgeMid, edgeDir, candidates);
+
+            var candidateSummary = candidates.Count > 0 ? string.Join("; ", candidates) : "(none)";
+            Mod.log.Info(
+                $"Unmatched edge {edgeEntity.Index}:{edgeEntity.Version} start={FormatPoint(startPos)} end={FormatPoint(endPos)} mid={FormatPoint(edgeMid)} dir={FormatPoint(edgeDir)} candidates={candidateSummary}");
+        }
+
+        private bool TryFindBestQueuedSegmentGlobally(
+            float3 edgeStart,
+            float3 edgeEnd,
+            float3 edgeMid,
+            float3 edgeDir,
+            NativeParallelHashSet<int> matchedSegments,
+            out int bestIndex,
+            out float bestScore)
+        {
+            bestIndex = -1;
+            bestScore = float.MaxValue;
+
+            for (var i = 0; i < _queuedSegmentInfos.Count; i++)
+            {
+                if (matchedSegments.Contains(i))
+                    continue;
+
+                var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, _queuedSegmentInfos[i], out _);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestIndex = i;
+                }
+            }
+
+            return bestIndex >= 0;
+        }
+
+        private bool TryGetQueuedSegmentCandidates(
+            NativeParallelMultiHashMap<int, int> spatialIndex,
+            int neighborKey,
+            float3 edgeStart,
+            float3 edgeEnd,
+            float3 edgeMid,
+            float3 edgeDir,
+            List<string> candidates)
+        {
+            if (!spatialIndex.TryGetFirstValue(neighborKey, out var segIndex, out var iterator))
+                return false;
+
+            var foundAny = false;
+            do
+            {
+                var queuedInfo = _queuedSegmentInfos[segIndex];
+                var totalScore = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, queuedInfo, out var midScore);
+                var queuedDir = math.normalizesafe(queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
+                var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+                var endpointScore = math.min(
+                    math.distancesq(edgeStart, queuedInfo.StartPos) + math.distancesq(edgeEnd, queuedInfo.EndPos),
+                    math.distancesq(edgeStart, queuedInfo.EndPos) + math.distancesq(edgeEnd, queuedInfo.StartPos));
+
+                candidates.Add($"{queuedInfo.Name ?? string.Empty}@{totalScore:F1}/{endpointScore:F1}/{midScore:F1}/d{dirDot:F2}/l{queuedInfo.Lanes}");
+                foundAny = true;
+            }
+            while (spatialIndex.TryGetNextValue(out segIndex, ref iterator) && candidates.Count < 5);
+
+            return foundAny;
+        }
+
+        private void AddGlobalQueuedCandidateSummary(
+            float3 edgeStart,
+            float3 edgeEnd,
+            float3 edgeMid,
+            float3 edgeDir,
+            List<string> candidates)
+        {
+            var scored = new List<(float Score, string Text)>();
+            foreach (var queuedInfo in _queuedSegmentInfos)
+            {
+                var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, queuedInfo, out var midScore);
+                var queuedDir = math.normalizesafe(queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
+                var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+                var endpointScore = math.min(
+                    math.distancesq(edgeStart, queuedInfo.StartPos) + math.distancesq(edgeEnd, queuedInfo.EndPos),
+                    math.distancesq(edgeStart, queuedInfo.EndPos) + math.distancesq(edgeEnd, queuedInfo.StartPos));
+                scored.Add((score, $"{queuedInfo.Name ?? string.Empty}@{score:F1}/{endpointScore:F1}/{midScore:F1}/d{dirDot:F2}/l{queuedInfo.Lanes}"));
+            }
+
+            foreach (var item in scored.OrderBy(s => s.Score).Take(5))
+                candidates.Add(item.Text);
+        }
+
+        private static float ScoreQueuedSegment(
+            float3 edgeStart,
+            float3 edgeEnd,
+            float3 edgeMid,
+            float3 edgeDir,
+            QueuedSegmentInfo queuedInfo,
+            out float midScore)
+        {
+            var queuedDir = math.normalizesafe(queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
+            var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+            var sameOrientationScore = math.distancesq(edgeStart, queuedInfo.StartPos) +
+                                       math.distancesq(edgeEnd, queuedInfo.EndPos);
+            var reversedOrientationScore = math.distancesq(edgeStart, queuedInfo.EndPos) +
+                                            math.distancesq(edgeEnd, queuedInfo.StartPos);
+            var endpointScore = math.min(sameOrientationScore, reversedOrientationScore);
+            midScore = math.distancesq(queuedInfo.MidPoint, edgeMid);
+            var directionPenalty = (1f - math.clamp(dirDot, 0f, 1f)) * 25f;
+            return endpointScore + midScore * 0.25f + directionPenalty;
         }
 
         private Entity ResolveRoadNameTarget(Entity entity)
@@ -855,6 +1032,26 @@ namespace cs2_osm_importer
         {
             if (string.IsNullOrWhiteSpace(highwayType))
                 return _prefabEntity;
+
+            if (lanes <= 0)
+            {
+                var defaultLaneCount = GetDefaultLaneCountForHighwayType(highwayType);
+                if (defaultLaneCount > 0)
+                {
+                    var defaultLaneKey = $"{highwayType}:{defaultLaneCount}";
+                    if (_laneSpecificPrefabEntities.TryGetValue(defaultLaneKey, out var cachedDefaultLane))
+                        return cachedDefaultLane;
+
+                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount);
+                    if (defaultLaneMatch != Entity.Null)
+                    {
+                        _laneSpecificPrefabEntities[defaultLaneKey] = defaultLaneMatch;
+                        Mod.log.Info(
+                            $"Selected default lane prefab '{DescribePrefab(defaultLaneMatch)}' for highway type '{highwayType}' with {defaultLaneCount} lanes.");
+                        return defaultLaneMatch;
+                    }
+                }
+            }
 
             if (lanes > 0)
             {
@@ -995,13 +1192,13 @@ namespace cs2_osm_importer
                     return new[] { "Highway", "Freeway", "Boulevard" };
                 case "primary":
                 case "primary_link":
-                    return new[] { "Road", "Avenue", "Street" };
+                    return new[] { "Oneway", "Road", "Avenue", "Street" };
                 case "secondary":
                 case "secondary_link":
-                    return new[] { "Road", "Avenue" };
+                    return new[] { "Oneway", "Road", "Avenue" };
                 case "tertiary":
                 case "tertiary_link":
-                    return new[] { "Street", "Road" };
+                    return new[] { "Oneway", "Street", "Road" };
                 case "unclassified":
                 case "residential":
                 case "living_street":
@@ -1028,7 +1225,12 @@ namespace cs2_osm_importer
                 lower.Contains("bridge support") ||
                 lower.Contains("support") ||
                 lower.Contains("tunnel") ||
-                lower.Contains("interchange"))
+                lower.Contains("interchange") ||
+                lower.Contains("gravel") ||
+                lower.Contains("dirt") ||
+                lower.Contains("unpaved") ||
+                lower.Contains("track") ||
+                lower.Contains("path"))
             {
                 return false;
             }
@@ -1044,6 +1246,37 @@ namespace cs2_osm_importer
 
         private static bool IsSuitableRoadPrefabName(string prefabName) =>
             IsSuitableRoadPrefabName(prefabName, string.Empty);
+
+        private static int GetDefaultLaneCountForHighwayType(string highwayType)
+        {
+            switch ((highwayType ?? string.Empty).ToLowerInvariant())
+            {
+                case "motorway":
+                case "motorway_link":
+                    return 4;
+                case "trunk":
+                case "trunk_link":
+                    return 4;
+                case "primary":
+                case "primary_link":
+                    return 3;
+                case "secondary":
+                case "secondary_link":
+                    return 2;
+                case "tertiary":
+                case "tertiary_link":
+                    return 2;
+                case "unclassified":
+                case "residential":
+                case "living_street":
+                case "road":
+                    return 2;
+                case "service":
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
 
         private string DescribePrefab(Entity prefabEntity)
         {

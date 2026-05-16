@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -16,6 +17,14 @@ namespace cs2_osm_importer
         public float CurveToleranceMeters { get; set; } = 0.5f;
         public float ScaleFactor { get; set; } = 1f;
         public float ElevationMeters { get; set; } = 0.2f;
+        public float LayerElevationStepMeters { get; set; } = 6f;
+        public float BridgeElevationMeters { get; set; } = 6f;
+        public float TunnelDepthMeters { get; set; } = 6f;
+        public float CoveredDepthMeters { get; set; } = 5f;
+        public float EmbankmentElevationMeters { get; set; } = 3f;
+        public float CuttingDepthMeters { get; set; } = 3f;
+        public bool UseImportHighwayTypesFilter { get; set; }
+        public HashSet<string> ImportHighwayTypes { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public string RoadPrefabName { get; set; } = string.Empty;
         public int MaxWays { get; set; } = 10000;
     }
@@ -38,6 +47,7 @@ namespace cs2_osm_importer
     {
         public List<OsmWay> Ways { get; } = new List<OsmWay>();
         public int NodeCount { get; set; }
+        public int InferredLaneCount { get; set; }
         public double CenterLat { get; set; }
         public double CenterLon { get; set; }
         public float ElevationMeters { get; set; }
@@ -54,10 +64,12 @@ namespace cs2_osm_importer
         public string Ref { get; set; } = string.Empty;
         public string Highway { get; set; } = string.Empty;
         public int Lanes { get; set; }
+        public bool HasExplicitLaneCount { get; set; }
         public bool UsesStructuralElevation { get; set; }
         public float BaseElevationOffsetMeters { get; set; }
         public int InclineDirection { get; set; }
         public float InclinePercent { get; set; }
+        public List<long> NodeIds { get; } = new List<long>();
         public List<float> TerrainHeights { get; } = new List<float>();
         public List<float3> Points { get; } = new List<float3>();
     }

@@ -57,25 +57,38 @@ namespace cs2_osm_importer
         private Label _statusLabel;
         private Button _loadButton;
         private Button _resetDefaultsButton;
-        private Button _selectAllTypesButton;
-        private Button _deselectAllTypesButton;
         private Button _generateButton;
         private Button _deleteButton;
         private Game.UI.Widgets.Group _loadConfirmationGroup;
         private Button _confirmLoadButton;
         private Button _cancelLoadButton;
         private PopupValueField<string> _pathField;
-        private ExpandableGroup _importDataSection;
-        private Game.UI.Widgets.Group _roadTypesCheckboxGroup;
-        private Game.UI.Widgets.Group _roadTypesGroup;
+        private EditorSection _importDataSection;
+        private IWidget _importRoadTypeSelectionWidget;
+        private RoadTypeFilterAdapter _importRoadTypeFilterAdapter;
+        private Label _importRoadTypesInstructionLabel;
+        private IWidget _generateRoadTypeSelectionWidget;
+        private RoadTypeFilterAdapter _generateRoadTypeFilterAdapter;
+        private Label _generateRoadTypesInstructionLabel;
         private FloatSliderField _simplifyToleranceField;
         private FloatSliderField _curveToleranceField;
         private FloatSliderField _scaleFactorField;
         private IntSliderField _maxWaysField;
         private EditorSection _advancedSettingsSection;
-        private readonly Dictionary<string, bool> _roadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private EditorSection _structuralElevationSection;
+        private readonly Dictionary<string, bool> _importRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, bool> _generateRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly List<RoadTypeToggleButton> _roadTypeTiles = new List<RoadTypeToggleButton>();
         private readonly List<string> _roadTypesOrder = new List<string>(SupportedRoadTypes);
+        private static readonly HashSet<string> DefaultSelectedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "motorway",
+            "motorway_link",
+            "trunk",
+            "trunk_link",
+            "primary",
+            "primary_link",
+        };
         private string _lastRoadTypeCountsJson = string.Empty;
         private bool _lastHasLoadedData;
         private string _pathValue;
@@ -83,12 +96,18 @@ namespace cs2_osm_importer
         private double _curveToleranceValue = 0.5d;
         private double _scaleFactorValue = 1d;
         private int _maxWaysValue = 10000;
+        private double _layerElevationStepValue = 6d;
+        private double _bridgeElevationValue = 6d;
+        private double _tunnelDepthValue = 6d;
+        private double _coveredDepthValue = 5d;
+        private double _embankmentElevationValue = 3d;
+        private double _cuttingDepthValue = 3d;
         private string _statusText = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         private int _fieldVersion;
         private bool _wasPanelActive;
         private bool _showLoadConfirmation;
         private bool _isPathInvalid;
-        private bool _importDataSectionExpanded = true;
+        private bool _advancedSettingsExpanded = true;
 
         protected override void OnCreate()
         {
@@ -97,14 +116,14 @@ namespace cs2_osm_importer
 
             title = OsmLocalization.T("OsmImporter.Panel.Title", "OSM Importer Tool");
             uiTag = "UITagPrefab:OSMImportPanel";
-            children = BuildChildren();
 
             SetPathValue(GetDefaultOsmPath());
             SetSimplifyToleranceValue(1d);
             SetCurveToleranceValue(0.5d);
             SetScaleFactorValue(1d);
             SetMaxWaysValue(10000);
-            SelectAllRoadTypes();
+            SelectDefaultRoadTypes();
+            children = BuildChildren();
             UpdateStatus(_importSystem.Status);
         }
 
@@ -212,6 +231,107 @@ namespace cs2_osm_importer
                 valueVersion = () => _fieldVersion,
             };
 
+            _structuralElevationSection = new EditorSection
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.StructuralElevation", "Structural elevation"),
+                expanded = true,
+                children = new List<IWidget>
+                {
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.LayerElevationStep", "Layer step (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.LayerElevationStep", "Height added for each OSM layer level."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _layerElevationStepValue, SetLayerElevationStepValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.BridgeElevation", "Bridge height (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.BridgeElevation", "Extra height added to roads tagged as bridges."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _bridgeElevationValue, SetBridgeElevationValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.TunnelDepth", "Tunnel depth (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.TunnelDepth", "Depth subtracted from roads tagged as tunnels."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _tunnelDepthValue, SetTunnelDepthValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.CoveredDepth", "Covered depth (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.CoveredDepth", "Depth subtracted from roads tagged as covered."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _coveredDepthValue, SetCoveredDepthValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.EmbankmentElevation", "Embankment height (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.EmbankmentElevation", "Height added to roads tagged as embankments."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _embankmentElevationValue, SetEmbankmentElevationValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                    new FloatSliderField
+                    {
+                        displayName = OsmLocalization.T("OsmImporter.Label.CuttingDepth", "Cutting depth (m)"),
+                        tooltip = OsmLocalization.T("OsmImporter.Tooltip.CuttingDepth", "Depth subtracted from roads tagged as cuttings."),
+                        min = 0d,
+                        max = 20d,
+                        step = 0.1,
+                        fractionDigits = 1,
+                        stepMultiplier = 10d,
+                        unit = "m",
+                        accessor = new TypedValueAccessor<double>(() => _cuttingDepthValue, SetCuttingDepthValue),
+                        valueVersion = () => _fieldVersion,
+                    },
+                },
+            };
+
+            _importRoadTypeSelectionWidget = BuildImportRoadTypeSelectionWidget();
+            _importRoadTypesInstructionLabel = new Label
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.ImportRoadTypesInstructions", "Choose which road types should be loaded from the OSM file."),
+                level = Label.Level.SubTitle,
+            };
+
+            _generateRoadTypeSelectionWidget = BuildGenerateRoadTypeSelectionWidget();
+            _generateRoadTypesInstructionLabel = new Label
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoadTypesInstructions", "Choose which of the imported road types should be generated."),
+                level = Label.Level.SubTitle,
+            };
+
             _loadButton = new Button
             {
                 displayName = OsmLocalization.T("OsmImporter.Button.LoadOSMData", "Load OSM Data"),
@@ -255,20 +375,22 @@ namespace cs2_osm_importer
             _advancedSettingsSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.AdvancedSettings", "Advanced settings"),
-                expanded = true,
+                expanded = _advancedSettingsExpanded,
                 children = new List<IWidget>
                 {
                     _simplifyToleranceField,
                     _curveToleranceField,
                     _scaleFactorField,
                     _maxWaysField,
+                    _structuralElevationSection,
                     _resetDefaultsButton,
                 },
             };
 
-            _importDataSection = new ExpandableGroup(_importDataSectionExpanded)
+            _importDataSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.ImportData", "Import data"),
+                expanded = true,
                 children = new List<IWidget>
                 {
                     new Label
@@ -276,6 +398,8 @@ namespace cs2_osm_importer
                         displayName = OsmLocalization.T("OsmImporter.Label.ImportInstructions", "Pick an OSM input file and configure how the data is parsed before loading it into the game."),
                     },
                     _pathField,
+                    _importRoadTypesInstructionLabel,
+                    _importRoadTypeSelectionWidget,
                     _advancedSettingsSection,
                     _loadButton,
                     _loadConfirmationGroup,
@@ -296,49 +420,27 @@ namespace cs2_osm_importer
                 action = DeleteAllRoads,
             };
 
-            _selectAllTypesButton = new Button
+            var supportedTypesLabel = new Label
             {
-                displayName = OsmLocalization.T("OsmImporter.Button.SelectAll", "Select all"),
-                action = SelectAllRoadTypes,
+                displayName = OsmLocalization.F("OsmImporter.Label.SupportedTypes", "Supported types: {0}", string.Join(", ", SupportedRoadTypes.Select(GetRoadTypeDisplayName))),
+                level = Label.Level.SubTitle,
             };
 
-            _deselectAllTypesButton = new Button
-            {
-                displayName = OsmLocalization.T("OsmImporter.Button.DeselectAll", "Deselect all"),
-                action = DeselectAllRoadTypes,
-            };
-
-            _roadTypesCheckboxGroup = new Game.UI.Widgets.Group
-            {
-                displayName = OsmLocalization.T("OsmImporter.Label.RoadTypes", "Road types"),
-                children = BuildRoadTypeCheckboxes(),
-            };
-
-            _roadTypesGroup = new Game.UI.Widgets.Group
+            var generateSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
+                expanded = true,
                 children = new List<IWidget>
                 {
-                    new Label
-                    {
-                        displayName = OsmLocalization.T("OsmImporter.Label.GenerateInstructions", "Choose which loaded road types should be generated."),
-                        level = Label.Level.SubTitle
-                    },
-                    _roadTypesCheckboxGroup,
-                    new Label
-                    {
-                        displayName = OsmLocalization.F("OsmImporter.Label.SupportedTypes", "Supported types: {0}", string.Join(", ", SupportedRoadTypes.Select(GetRoadTypeDisplayName))),
-                        level = Label.Level.SubTitle,
-                    },
-                    // CreateButtonPairRow(_selectAllTypesButton, _deselectAllTypesButton),
-                    _selectAllTypesButton,
-                    _deselectAllTypesButton,
+                    _generateRoadTypesInstructionLabel,
+                    supportedTypesLabel,
+                    _generateRoadTypeSelectionWidget,
                     _generateButton,
                     _deleteButton,
                 },
             };
 
-            content.Add(_roadTypesGroup);
+            content.Add(generateSection);
 
             content.Add(_statusLabel);
 
@@ -361,6 +463,14 @@ namespace cs2_osm_importer
                 CurveToleranceMeters = (float)_curveToleranceValue,
                 ScaleFactor = (float)_scaleFactorValue,
                 ElevationMeters = 0.2f,
+                UseImportHighwayTypesFilter = true,
+                ImportHighwayTypes = new HashSet<string>(GetSelectedRoadTypes(_importRoadTypeSelections), StringComparer.OrdinalIgnoreCase),
+                LayerElevationStepMeters = (float)_layerElevationStepValue,
+                BridgeElevationMeters = (float)_bridgeElevationValue,
+                TunnelDepthMeters = (float)_tunnelDepthValue,
+                CoveredDepthMeters = (float)_coveredDepthValue,
+                EmbankmentElevationMeters = (float)_embankmentElevationValue,
+                CuttingDepthMeters = (float)_cuttingDepthValue,
                 MaxWays = _maxWaysValue,
             };
 
@@ -398,7 +508,7 @@ namespace cs2_osm_importer
         private void GenerateRoads()
         {
             var options = new OsmGenerateOptions();
-            foreach (var roadType in GetSelectedRoadTypes())
+            foreach (var roadType in GetSelectedGenerateRoadTypes())
             {
                 options.HighwayTypes.Add(roadType);
             }
@@ -429,26 +539,35 @@ namespace cs2_osm_importer
             SetCurveToleranceValue(0.5d);
             SetScaleFactorValue(1d);
             SetMaxWaysValue(10000);
+            SetLayerElevationStepValue(6d);
+            SetBridgeElevationValue(6d);
+            SetTunnelDepthValue(6d);
+            SetCoveredDepthValue(5d);
+            SetEmbankmentElevationValue(3d);
+            SetCuttingDepthValue(3d);
             ResetAdvancedSettingsSection();
             UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
         }
 
-        private void SelectAllRoadTypes()
+        private void SelectDefaultRoadTypes()
         {
-            foreach (var roadType in SupportedRoadTypes)
-                _roadTypeSelections[roadType] = true;
-
-            BumpFieldVersion();
-            UpdateStatus(OsmLocalization.T("OsmImporter.Status.AllRoadTypesSelected", "All supported road types selected."));
+            SelectDefaultRoadTypes(_importRoadTypeSelections);
         }
 
-        private void DeselectAllRoadTypes()
+        private void SelectDefaultRoadTypes(Dictionary<string, bool> selections)
         {
             foreach (var roadType in SupportedRoadTypes)
-                _roadTypeSelections[roadType] = false;
+                selections[roadType] = DefaultSelectedRoadTypes.Contains(roadType);
 
             BumpFieldVersion();
-            UpdateStatus(OsmLocalization.T("OsmImporter.Status.AllRoadTypesDeselected", "All supported road types deselected."));
+            SyncRoadTypeFilterAdapters();
+        }
+
+        private bool IsRoadTypeImported(string roadType)
+        {
+            return _importSystem?.RoadTypeCountsByType != null
+                && _importSystem.RoadTypeCountsByType.TryGetValue(roadType ?? string.Empty, out var count)
+                && count > 0;
         }
 
         private void ResetAdvancedSettingsSection()
@@ -457,23 +576,35 @@ namespace cs2_osm_importer
                 _advancedSettingsSection.expanded = true;
         }
 
-        private void SetRoadTypeSelection(string roadType, bool selected)
+        private void SetRoadTypeSelection(Dictionary<string, bool> selections, string roadType, bool selected)
         {
-            if (string.IsNullOrWhiteSpace(roadType))
+            if (string.IsNullOrWhiteSpace(roadType) || selections == null)
                 return;
 
-            _roadTypeSelections[roadType] = selected;
+            selections[roadType] = selected;
             BumpFieldVersion();
+            SyncRoadTypeFilterAdapters();
         }
 
-        private IEnumerable<string> GetSelectedRoadTypes()
+        private IEnumerable<string> GetSelectedImportRoadTypes()
         {
-            return _roadTypesOrder.Where(roadType => _roadTypeSelections.TryGetValue(roadType, out var selected) && selected);
+            return GetSelectedRoadTypes(_importRoadTypeSelections);
+        }
+
+        private IEnumerable<string> GetSelectedGenerateRoadTypes()
+        {
+            return GetSelectedRoadTypes(_generateRoadTypeSelections)
+                .Where(IsRoadTypeImported);
+        }
+
+        private IEnumerable<string> GetSelectedRoadTypes(Dictionary<string, bool> selections)
+        {
+            return _roadTypesOrder.Where(roadType => selections.TryGetValue(roadType, out var selected) && selected);
         }
 
         private string GetSelectedRoadTypesSummary()
         {
-            var selected = GetSelectedRoadTypes().ToList();
+            var selected = GetSelectedImportRoadTypes().ToList();
             if (selected.Count == 0)
                 return OsmLocalization.T("OsmImporter.Value.None", "none");
 
@@ -497,13 +628,14 @@ namespace cs2_osm_importer
 
         private void UpdateImportSectionState()
         {
-            if (_importDataSection == null || _importSystem == null)
+            if (_importSystem == null)
                 return;
 
             if (_importSystem.HasLoadedData && !_lastHasLoadedData)
             {
-                _importDataSectionExpanded = false;
-                _importDataSection.expanded = false;
+                _advancedSettingsExpanded = false;
+                if (_advancedSettingsSection != null)
+                    _advancedSettingsSection.expanded = false;
                 children = BuildChildren();
             }
 
@@ -522,20 +654,11 @@ namespace cs2_osm_importer
             if (_resetDefaultsButton != null)
                 _resetDefaultsButton.disabled = () => isBusy;
 
-            if (_selectAllTypesButton != null)
-                _selectAllTypesButton.disabled = () => isBusy;
-
-            if (_deselectAllTypesButton != null)
-                _deselectAllTypesButton.disabled = () => isBusy;
-
             if (_generateButton != null)
                 _generateButton.disabled = () => isBusy || !hasLoadedData;
 
             if (_deleteButton != null)
                 _deleteButton.disabled = () => !hasGeneratedAssets;
-
-            if (_roadTypesGroup != null)
-                _roadTypesGroup.hidden = () => !hasLoadedData;
         }
 
         private void SetPathValue(string value)
@@ -593,6 +716,42 @@ namespace cs2_osm_importer
             BumpFieldVersion();
         }
 
+        private void SetLayerElevationStepValue(double value)
+        {
+            _layerElevationStepValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetBridgeElevationValue(double value)
+        {
+            _bridgeElevationValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetTunnelDepthValue(double value)
+        {
+            _tunnelDepthValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetCoveredDepthValue(double value)
+        {
+            _coveredDepthValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetEmbankmentElevationValue(double value)
+        {
+            _embankmentElevationValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetCuttingDepthValue(double value)
+        {
+            _cuttingDepthValue = value;
+            BumpFieldVersion();
+        }
+
         private void RefreshSelectedRoadTypes()
         {
             BumpFieldVersion();
@@ -605,11 +764,210 @@ namespace cs2_osm_importer
                 return;
 
             var countsJson = _importSystem.RoadTypeCountsJson ?? string.Empty;
-            if (countsJson == _lastRoadTypeCountsJson && _roadTypeTiles.Count > 0)
+            if (countsJson == _lastRoadTypeCountsJson)
                 return;
 
             _lastRoadTypeCountsJson = countsJson;
+
+            // Whenever the set of imported road types changes, refresh the generate dictionary
+            // so it reflects exactly what was imported. Every newly-imported road type starts out
+            // selected so the user can click Generate immediately; types that aren't in the new
+            // import are removed entirely from the generate selection.
+            if (_importSystem.HasLoadedData
+                && _importSystem.RoadTypeCountsByType != null
+                && _importSystem.RoadTypeCountsByType.Count > 0)
+            {
+                _generateRoadTypeSelections.Clear();
+                foreach (var roadType in _roadTypesOrder)
+                {
+                    if (IsRoadTypeImported(roadType))
+                        _generateRoadTypeSelections[roadType] = true;
+                }
+            }
+            else
+            {
+                _generateRoadTypeSelections.Clear();
+            }
+
+            SyncRoadTypeFilterAdapters();
             RefreshSelectedRoadTypes();
+        }
+
+        private IWidget BuildImportRoadTypeSelectionWidget()
+        {
+            _importRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _importRoadTypeSelections);
+            _importRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableImportRoadTypes());
+            _importRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedImportRoadTypes());
+
+            return new FilterMenu
+            {
+                adapter = _importRoadTypeFilterAdapter,
+            };
+        }
+
+        private IWidget BuildGenerateRoadTypeSelectionWidget()
+        {
+            _generateRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _generateRoadTypeSelections);
+            _generateRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableGenerateRoadTypes());
+            _generateRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedGenerateRoadTypes());
+
+            return new FilterMenu
+            {
+                adapter = _generateRoadTypeFilterAdapter,
+            };
+        }
+
+        private IEnumerable<string> GetAvailableImportRoadTypes()
+        {
+            // The import filter always exposes every supported OSM road type because the user is
+            // deciding what to extract from the OSM file before any data has been loaded.
+            return _roadTypesOrder;
+        }
+
+        private IEnumerable<string> GetAvailableGenerateRoadTypes()
+        {
+            // The generate filter only exposes road types that the most recent import actually
+            // produced. Before any import (or after a failed/empty import) the list stays empty.
+            if (_importSystem?.HasLoadedData == true && _importSystem.RoadTypeCountsByType != null && _importSystem.RoadTypeCountsByType.Count > 0)
+            {
+                return _roadTypesOrder.Where(roadType => _importSystem.RoadTypeCountsByType.TryGetValue(roadType, out var count) && count > 0);
+            }
+
+            return Array.Empty<string>();
+        }
+
+        private void SyncRoadTypeFilterAdapters()
+        {
+            if (_importRoadTypeFilterAdapter != null)
+            {
+                _importRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableImportRoadTypes());
+                _importRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedImportRoadTypes());
+            }
+
+            if (_generateRoadTypeFilterAdapter != null)
+            {
+                _generateRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableGenerateRoadTypes());
+                _generateRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedGenerateRoadTypes());
+            }
+        }
+
+        private bool TryPopulateRoadTypeFilterMenu(FilterMenu menu)
+        {
+            if (menu == null)
+                return false;
+
+            var methods = typeof(FilterMenu)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => string.Equals(method.Name, "AddFilter", StringComparison.OrdinalIgnoreCase))
+                .Where(method => method.GetParameters().Length > 0)
+                .OrderBy(method => method.GetParameters().Length)
+                .ToList();
+
+            var addedAny = false;
+
+            foreach (var roadType in _roadTypesOrder)
+            {
+                var selected = _importRoadTypeSelections.TryGetValue(roadType, out var value) && value;
+                var metadata = TryGetRoadTypeMetadata(roadType, out var roadMetadata) ? roadMetadata : null;
+                var label = metadata?.DisplayName ?? GetRoadTypeDisplayName(roadType);
+                var tooltip = metadata?.Description ?? string.Empty;
+
+                var added = false;
+                foreach (var method in methods)
+                {
+                    if (TryInvokeAddFilter(menu, method, roadType, label, tooltip, selected))
+                    {
+                        added = true;
+                        addedAny = true;
+                        break;
+                    }
+                }
+
+                if (!added)
+                    break;
+            }
+
+            return addedAny;
+        }
+
+        private bool TryInvokeAddFilter(FilterMenu menu, MethodInfo method, string roadType, string label, string tooltip, bool selected)
+        {
+            if (menu == null || method == null)
+                return false;
+
+            var parameters = method.GetParameters();
+            var args = new object[parameters.Length];
+
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameterType = parameters[i].ParameterType;
+
+                if (parameterType == typeof(string))
+                {
+                    args[i] = i == 0 ? label : tooltip;
+                    continue;
+                }
+
+                if (parameterType == typeof(bool))
+                {
+                    args[i] = selected;
+                    continue;
+                }
+
+                if (parameterType == typeof(int))
+                {
+                    args[i] = _roadTypesOrder.IndexOf(roadType);
+                    continue;
+                }
+
+                if (parameterType == typeof(float))
+                {
+                    args[i] = 0f;
+                    continue;
+                }
+
+                if (parameterType == typeof(double))
+                {
+                    args[i] = 0d;
+                    continue;
+                }
+
+                if (typeof(Action<bool>).IsAssignableFrom(parameterType))
+                {
+                    args[i] = new Action<bool>(value => SetRoadTypeSelection(_importRoadTypeSelections, roadType, value));
+                    continue;
+                }
+
+                if (typeof(Action).IsAssignableFrom(parameterType))
+                {
+                    args[i] = new Action(() => { });
+                    continue;
+                }
+
+                if (parameterType.IsAssignableFrom(typeof(TypedValueAccessor<bool>)))
+                {
+                    args[i] = new TypedValueAccessor<bool>(() => _importRoadTypeSelections.TryGetValue(roadType, out var value) && value, value => SetRoadTypeSelection(_importRoadTypeSelections, roadType, value));
+                    continue;
+                }
+
+                if (!parameterType.IsValueType)
+                {
+                    args[i] = null;
+                    continue;
+                }
+
+                args[i] = Activator.CreateInstance(parameterType);
+            }
+
+            try
+            {
+                method.Invoke(menu, args);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private int GetRoadTypeCount(string roadType)
@@ -645,25 +1003,32 @@ namespace cs2_osm_importer
 
         private List<IWidget> BuildRoadTypeCheckboxes()
         {
+            return BuildRoadTypeCheckboxes(_importRoadTypeSelections, includeCounts: true, sortByCount: true);
+        }
+
+        private List<IWidget> BuildRoadTypeCheckboxes(Dictionary<string, bool> selections, bool includeCounts, bool sortByCount)
+        {
             var rows = new List<IWidget>();
             _roadTypeTiles.Clear();
 
-            var orderedRoadTypes = _roadTypesOrder
-                .OrderByDescending(GetRoadTypeCount)
-                .ThenBy(GetRoadTypeDisplayName)
-                .ThenBy(roadType => _roadTypesOrder.IndexOf(roadType))
-                .ToList();
+            var orderedRoadTypes = sortByCount
+                ? _roadTypesOrder
+                    .OrderByDescending(GetRoadTypeCount)
+                    .ThenBy(GetRoadTypeDisplayName)
+                    .ThenBy(roadType => _roadTypesOrder.IndexOf(roadType))
+                    .ToList()
+                : _roadTypesOrder.ToList();
 
             for (var i = 0; i < orderedRoadTypes.Count; i += 3)
             {
                 var rowChildren = new List<IWidget>();
-                rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i]));
+                rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i], selections, includeCounts, sortByCount));
 
                 if (i + 1 < orderedRoadTypes.Count)
-                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 1]));
+                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 1], selections, includeCounts, sortByCount));
 
                 if (i + 2 < orderedRoadTypes.Count)
-                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 2]));
+                    rowChildren.Add(BuildRoadTypeCell(orderedRoadTypes[i + 2], selections, includeCounts, sortByCount));
 
                 rows.Add(CreateRow(rowChildren));
             }
@@ -779,6 +1144,11 @@ namespace cs2_osm_importer
 
         private IWidget BuildRoadTypeCell(string roadType)
         {
+            return BuildRoadTypeCell(roadType, _importRoadTypeSelections, includeCounts: true, disableWhenCountZero: true);
+        }
+
+        private IWidget BuildRoadTypeCell(string roadType, Dictionary<string, bool> selections, bool includeCounts, bool disableWhenCountZero)
+        {
             var button = new RoadTypeToggleButton(roadType, TryGetRoadTypeMetadata(roadType, out var metadata) ? metadata : null)
             {
                 Count = GetRoadTypeCount(roadType),
@@ -786,12 +1156,12 @@ namespace cs2_osm_importer
 
             button.NameLabel = new Label
             {
-                displayName = FormatRoadTypeLabel(button.DisplayName, button.Count),
+                displayName = includeCounts ? FormatRoadTypeLabel(button.DisplayName, button.Count) : button.DisplayName,
             };
 
             var root = CreateRow(new List<IWidget>
             {
-                BuildRoadTypeToggle(roadType),
+                BuildRoadTypeToggle(roadType, selections, disableWhenCountZero),
                 button.NameLabel,
             }, null);
 
@@ -803,8 +1173,13 @@ namespace cs2_osm_importer
 
         private ToggleField BuildRoadTypeToggle(string roadType)
         {
-            if (!_roadTypeSelections.ContainsKey(roadType))
-                _roadTypeSelections[roadType] = true;
+            return BuildRoadTypeToggle(roadType, _importRoadTypeSelections, disableWhenCountZero: true);
+        }
+
+        private ToggleField BuildRoadTypeToggle(string roadType, Dictionary<string, bool> selections, bool disableWhenCountZero)
+        {
+            if (!selections.ContainsKey(roadType))
+                selections[roadType] = true;
 
             var key = roadType;
             var count = GetRoadTypeCount(roadType);
@@ -812,10 +1187,10 @@ namespace cs2_osm_importer
             {
                 displayName = string.Empty,
                 accessor = new TypedValueAccessor<bool>(
-                    () => _roadTypeSelections.TryGetValue(key, out var value) && value,
-                    value => SetRoadTypeSelection(key, value)),
+                    () => selections.TryGetValue(key, out var value) && value,
+                    value => SetRoadTypeSelection(selections, key, value)),
                 valueVersion = () => _fieldVersion,
-                disabled = () => _importSystem != null && (_importSystem.IsImporting || _importSystem.HasGeneratedAssets || count <= 0),
+                disabled = () => _importSystem != null && (_importSystem.IsImporting || (disableWhenCountZero && count <= 0)),
             };
         }
 
@@ -843,6 +1218,75 @@ namespace cs2_osm_importer
             public string DisplayName => OsmLocalization.T(DisplayNameKey, DisplayNameFallback);
 
             public string Description => OsmLocalization.T(DescriptionKey, DescriptionFallback);
+        }
+
+        private sealed class RoadTypeFilterAdapter : FilterMenu.IAdapter
+        {
+            private readonly OsmImportPanelSystem _panel;
+            private readonly Dictionary<string, bool> _selections;
+            private readonly Dictionary<string, string> _displayToRoadType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            public RoadTypeFilterAdapter(OsmImportPanelSystem panel, Dictionary<string, bool> selections)
+            {
+                _panel = panel;
+                _selections = selections;
+            }
+
+            public List<string> availableFilters { get; } = new List<string>();
+
+            public List<string> activeFilters { get; } = new List<string>();
+
+            public Action onAvailableFiltersChanged { get; set; }
+
+            public void SyncAvailableRoadTypes(IEnumerable<string> roadTypes)
+            {
+                availableFilters.Clear();
+                _displayToRoadType.Clear();
+
+                foreach (var roadType in roadTypes ?? Array.Empty<string>())
+                {
+                    var displayName = OsmImportPanelSystem.GetRoadTypeDisplayName(roadType);
+                    if (_displayToRoadType.ContainsKey(displayName))
+                        continue;
+
+                    _displayToRoadType[displayName] = roadType;
+                    availableFilters.Add(displayName);
+                }
+
+                activeFilters.RemoveAll(filter => !_displayToRoadType.ContainsKey(filter));
+                onAvailableFiltersChanged?.Invoke();
+            }
+
+            public void SyncActiveRoadTypes(IEnumerable<string> roadTypes)
+            {
+                activeFilters.Clear();
+
+                foreach (var roadType in roadTypes ?? Array.Empty<string>())
+                {
+                    var displayName = OsmImportPanelSystem.GetRoadTypeDisplayName(roadType);
+                    if (!_displayToRoadType.ContainsKey(displayName) || activeFilters.Contains(displayName))
+                        continue;
+
+                    activeFilters.Add(displayName);
+                }
+            }
+
+            public void ToggleFilter(string filter, bool active)
+            {
+                if (!_displayToRoadType.TryGetValue(filter ?? string.Empty, out var roadType))
+                    return;
+
+                _panel.SetRoadTypeSelection(_selections, roadType, active);
+                SyncActiveRoadTypes(_panel.GetSelectedRoadTypes(_selections));
+            }
+
+            public void ClearFilters()
+            {
+                foreach (var roadType in _displayToRoadType.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+                    _panel.SetRoadTypeSelection(_selections, roadType, false);
+
+                SyncActiveRoadTypes(Array.Empty<string>());
+            }
         }
 
         private sealed class RoadTypeToggleButton

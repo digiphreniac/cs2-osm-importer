@@ -12,12 +12,6 @@ namespace cs2_osm_importer
     {
         private const double EarthRadiusMeters = 6378137d;
         private const float MaxTerrainSegmentLengthMeters = 15f;
-        private const float LayerElevationStepMeters = 6f;
-        private const float BridgeElevationMeters = 6f;
-        private const float TunnelDepthMeters = 6f;
-        private const float CoveredDepthMeters = 5f;
-        private const float EmbankmentElevationMeters = 3f;
-        private const float CuttingDepthMeters = 3f;
         private const float DefaultInclinePercent = 4f;
 
         private sealed class GeoNode
@@ -65,7 +59,7 @@ namespace cs2_osm_importer
 
             foreach (XmlElement wayElement in wayElements)
             {
-                if (!TryReadSupportedRoadWay(wayElement, out var highway, out var isArea))
+                if (!TryReadSupportedRoadWay(wayElement, options.UseImportHighwayTypesFilter, options.ImportHighwayTypes, out var highway, out var isArea))
                     continue;
 
                 var nds = wayElement.SelectNodes("nd");
@@ -132,17 +126,28 @@ namespace cs2_osm_importer
                 document.CenterLon = center.Lon;
             }
 
+            var parsedWays = new List<OsmWay>();
             foreach (var wayElement in supportedWays)
             {
-                if (document.Ways.Count >= Math.Max(1, options.MaxWays))
-                    break;
-
                 if (TryReadRoadWay(wayElement, nodes, options, sampleHeight, worldOffset, out var way))
-                {
-                    document.Ways.Add(way);
-                    IncludeBounds(document, way);
-                }
+                    parsedWays.Add(way);
             }
+
+            var mergedWays = MergeSimpleConnectedWays(parsedWays, out var mergedWayCount);
+            if (mergedWayCount > 0)
+                Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
+            if (mergedWayCount > 0)
+                document.Ways.AddRange(mergedWays);
+            else
+                document.Ways.AddRange(parsedWays);
+
+            if (document.Ways.Count > Math.Max(1, options.MaxWays))
+                document.Ways.RemoveRange(Math.Max(1, options.MaxWays), document.Ways.Count - Math.Max(1, options.MaxWays));
+
+            foreach (var way in document.Ways)
+                IncludeBounds(document, way);
+
+            document.InferredLaneCount = NormalizeContiguousLaneCounts(document.Ways);
             return document;
         }
 
@@ -244,9 +249,16 @@ namespace cs2_osm_importer
                 return false;
 
             if (!hasExplicitLaneCount && (forwardLaneCount > 0 || backwardLaneCount > 0))
+            {
                 way.Lanes = forwardLaneCount + backwardLaneCount;
+                way.HasExplicitLaneCount = true;
+            }
+
+            if (hasExplicitLaneCount)
+                way.HasExplicitLaneCount = true;
 
             way.BaseElevationOffsetMeters = EstimateBaseElevationOffset(
+                options,
                 hasLayer,
                 layer,
                 isBridge,
@@ -265,7 +277,10 @@ namespace cs2_osm_importer
 
             foreach (XmlElement nd in nds)
             {
-                if (!nodes.TryGetValue(ReadLong(nd, "ref"), out var node))
+                var nodeId = ReadLong(nd, "ref");
+                way.NodeIds.Add(nodeId);
+
+                if (!nodes.TryGetValue(nodeId, out var node))
                     continue;
 
                 var currentPoint = new float3(
@@ -305,6 +320,383 @@ namespace cs2_osm_importer
             if (sampleHeight == null)
                 Simplify(way.Points, Math.Max(0f, options.SimplifyToleranceMeters * options.ScaleFactor));
             return way.Points.Count >= 2;
+        }
+
+        private static List<OsmWay> MergeSimpleConnectedWays(List<OsmWay> ways, out int mergedWayCount)
+        {
+            mergedWayCount = 0;
+
+            if (ways == null || ways.Count == 0)
+                return new List<OsmWay>();
+
+            var parent = new int[ways.Count];
+            for (var i = 0; i < parent.Length; i++)
+                parent[i] = i;
+
+            var nodeUsageCounts = BuildEndpointUsageCounts(ways);
+            var nodeToWays = BuildNodeToWayIndexMap(ways);
+
+            foreach (var pair in nodeToWays)
+            {
+                var indices = pair.Value;
+                if (indices.Count < 2)
+                    continue;
+
+                for (var i = 0; i < indices.Count; i++)
+                {
+                    for (var j = i + 1; j < indices.Count; j++)
+                    {
+                        if (!CanMergeWays(ways[indices[i]], ways[indices[j]]))
+                            continue;
+
+                        Union(parent, indices[i], indices[j]);
+                    }
+                }
+            }
+
+            var components = new Dictionary<int, List<int>>();
+            for (var i = 0; i < ways.Count; i++)
+            {
+                var root = Find(parent, i);
+                if (!components.TryGetValue(root, out var component))
+                {
+                    component = new List<int>();
+                    components[root] = component;
+                }
+
+                component.Add(i);
+            }
+
+            var result = new List<OsmWay>(ways.Count);
+            foreach (var component in components.Values.OrderBy(component => component.Min()))
+            {
+                if (component.Count < 2)
+                {
+                    result.Add(ways[component[0]]);
+                    continue;
+                }
+
+                if (TryMergeComponent(ways, component, nodeUsageCounts, out var mergedWay))
+                {
+                    result.Add(mergedWay);
+                    mergedWayCount += component.Count - 1;
+                    continue;
+                }
+
+                foreach (var index in component.OrderBy(index => index))
+                    result.Add(ways[index]);
+            }
+
+            return result;
+        }
+
+        private static Dictionary<long, int> BuildEndpointUsageCounts(List<OsmWay> ways)
+        {
+            var counts = new Dictionary<long, int>();
+
+            foreach (var way in ways)
+            {
+                if (way == null || way.NodeIds.Count < 2)
+                    continue;
+
+                IncrementCount(counts, way.NodeIds[0]);
+                IncrementCount(counts, way.NodeIds[way.NodeIds.Count - 1]);
+            }
+
+            return counts;
+        }
+
+        private static Dictionary<long, List<int>> BuildNodeToWayIndexMap(List<OsmWay> ways)
+        {
+            var map = new Dictionary<long, List<int>>();
+
+            for (var i = 0; i < ways.Count; i++)
+            {
+                var way = ways[i];
+                if (way == null || way.NodeIds.Count < 2)
+                    continue;
+
+                AddNodeWayIndex(map, way.NodeIds[0], i);
+                AddNodeWayIndex(map, way.NodeIds[way.NodeIds.Count - 1], i);
+            }
+
+            return map;
+        }
+
+        private static void AddNodeWayIndex(Dictionary<long, List<int>> map, long nodeId, int wayIndex)
+        {
+            if (!map.TryGetValue(nodeId, out var indices))
+            {
+                indices = new List<int>();
+                map[nodeId] = indices;
+            }
+
+            indices.Add(wayIndex);
+        }
+
+        private static void IncrementCount(Dictionary<long, int> counts, long nodeId)
+        {
+            counts.TryGetValue(nodeId, out var count);
+            counts[nodeId] = count + 1;
+        }
+
+        private static bool TryMergeComponent(
+            List<OsmWay> ways,
+            List<int> component,
+            Dictionary<long, int> nodeUsageCounts,
+            out OsmWay mergedWay)
+        {
+            mergedWay = null;
+
+            if (component == null || component.Count < 2)
+                return false;
+
+            var nodeCounts = new Dictionary<long, int>();
+            foreach (var index in component)
+            {
+                var way = ways[index];
+                if (way == null || way.NodeIds.Count < 2)
+                    return false;
+
+                if (way.NodeIds[0] == way.NodeIds[way.NodeIds.Count - 1])
+                    return false;
+
+                IncrementCount(nodeCounts, way.NodeIds[0]);
+                IncrementCount(nodeCounts, way.NodeIds[way.NodeIds.Count - 1]);
+
+                foreach (var nodeId in way.NodeIds)
+                {
+                    if (!nodeUsageCounts.TryGetValue(nodeId, out var usageCount) || usageCount > 2)
+                        return false;
+                }
+            }
+
+            if (nodeCounts.Count != component.Count + 1)
+                return false;
+
+            var endpoints = nodeCounts.Where(pair => pair.Value == 1).Select(pair => pair.Key).ToList();
+            if (endpoints.Count != 2 || nodeCounts.Any(pair => pair.Value > 2))
+                return false;
+
+            var orderedWays = new List<OsmWay>(component.Count);
+            var remaining = new HashSet<int>(component);
+            var currentNodeId = endpoints[0];
+            var startIndex = FindIncidentWayIndex(ways, remaining, currentNodeId);
+            if (startIndex < 0)
+                return false;
+
+            var currentWay = CloneOrientedWay(ways[startIndex], currentNodeId, out var currentEndNodeId);
+            if (currentWay == null)
+                return false;
+
+            orderedWays.Add(currentWay);
+            remaining.Remove(startIndex);
+
+            while (remaining.Count > 0)
+            {
+                var nextIndex = FindIncidentWayIndex(ways, remaining, currentEndNodeId);
+                if (nextIndex < 0)
+                    return false;
+
+                var nextWay = CloneOrientedWay(ways[nextIndex], currentEndNodeId, out var nextEndNodeId);
+                if (nextWay == null)
+                    return false;
+
+                if (!IsStraightContinuation(orderedWays[orderedWays.Count - 1], nextWay))
+                    return false;
+
+                orderedWays.Add(nextWay);
+                remaining.Remove(nextIndex);
+                currentEndNodeId = nextEndNodeId;
+            }
+
+            if (currentEndNodeId != endpoints[1])
+                return false;
+
+            mergedWay = MergeOrientedWays(orderedWays);
+            return mergedWay != null && mergedWay.Points.Count >= 2;
+        }
+
+        private static int FindIncidentWayIndex(List<OsmWay> ways, HashSet<int> remaining, long nodeId)
+        {
+            foreach (var index in remaining.OrderBy(index => index))
+            {
+                var way = ways[index];
+                if (way == null || way.NodeIds.Count < 2)
+                    continue;
+
+                if (way.NodeIds[0] == nodeId || way.NodeIds[way.NodeIds.Count - 1] == nodeId)
+                    return index;
+            }
+
+            return -1;
+        }
+
+        private static OsmWay CloneOrientedWay(OsmWay way, long startNodeId, out long endNodeId)
+        {
+            endNodeId = 0;
+
+            if (way == null || way.NodeIds.Count < 2)
+                return null;
+
+            var reversed = way.NodeIds[way.NodeIds.Count - 1] == startNodeId;
+            if (!reversed && way.NodeIds[0] != startNodeId)
+                return null;
+
+            var clone = new OsmWay
+            {
+                Id = way.Id,
+                Name = way.Name,
+                Ref = way.Ref,
+                Highway = way.Highway,
+                Lanes = way.Lanes,
+                HasExplicitLaneCount = way.HasExplicitLaneCount,
+                UsesStructuralElevation = way.UsesStructuralElevation,
+                BaseElevationOffsetMeters = way.BaseElevationOffsetMeters,
+                InclineDirection = way.InclineDirection,
+                InclinePercent = way.InclinePercent
+            };
+
+            if (reversed)
+            {
+                for (var i = way.NodeIds.Count - 1; i >= 0; i--)
+                    clone.NodeIds.Add(way.NodeIds[i]);
+
+                for (var i = way.Points.Count - 1; i >= 0; i--)
+                    clone.Points.Add(way.Points[i]);
+
+                for (var i = way.TerrainHeights.Count - 1; i >= 0; i--)
+                    clone.TerrainHeights.Add(way.TerrainHeights[i]);
+            }
+            else
+            {
+                clone.NodeIds.AddRange(way.NodeIds);
+                clone.Points.AddRange(way.Points);
+                clone.TerrainHeights.AddRange(way.TerrainHeights);
+            }
+
+            endNodeId = clone.NodeIds[clone.NodeIds.Count - 1];
+            return clone;
+        }
+
+        private static OsmWay MergeOrientedWays(List<OsmWay> ways)
+        {
+            if (ways == null || ways.Count == 0)
+                return null;
+
+            var merged = new OsmWay
+            {
+                Id = ways[0].Id,
+                Name = ways[0].Name,
+                Ref = ways[0].Ref,
+                Highway = ways[0].Highway,
+                Lanes = ways[0].Lanes,
+                HasExplicitLaneCount = ways[0].HasExplicitLaneCount,
+                UsesStructuralElevation = ways[0].UsesStructuralElevation,
+                BaseElevationOffsetMeters = ways[0].BaseElevationOffsetMeters,
+                InclineDirection = ways[0].InclineDirection,
+                InclinePercent = ways[0].InclinePercent
+            };
+
+            if (merged.Lanes <= 0)
+            {
+                foreach (var way in ways)
+                {
+                    if (way.Lanes <= 0)
+                        continue;
+
+                    merged.Lanes = way.Lanes;
+                    merged.HasExplicitLaneCount |= way.HasExplicitLaneCount;
+                    break;
+                }
+            }
+
+            for (var i = 0; i < ways.Count; i++)
+            {
+                var way = ways[i];
+                var startIndex = i == 0 ? 0 : 1;
+
+                for (var pointIndex = startIndex; pointIndex < way.Points.Count; pointIndex++)
+                    merged.Points.Add(way.Points[pointIndex]);
+
+                for (var heightIndex = startIndex; heightIndex < way.TerrainHeights.Count; heightIndex++)
+                    merged.TerrainHeights.Add(way.TerrainHeights[heightIndex]);
+
+                if (i == 0)
+                {
+                    merged.NodeIds.AddRange(way.NodeIds);
+                    continue;
+                }
+
+                for (var nodeIndex = 1; nodeIndex < way.NodeIds.Count; nodeIndex++)
+                    merged.NodeIds.Add(way.NodeIds[nodeIndex]);
+            }
+
+            return merged.Points.Count >= 2 ? merged : null;
+        }
+
+        private static bool CanMergeWays(OsmWay a, OsmWay b)
+        {
+            if (a == null || b == null)
+                return false;
+
+            if (!string.Equals(a.Highway?.Trim(), b.Highway?.Trim(), StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (!AreCompatibleLabels(a.Name, b.Name) || !AreCompatibleLabels(a.Ref, b.Ref))
+                return false;
+
+            if (a.UsesStructuralElevation != b.UsesStructuralElevation)
+                return false;
+
+            if (!ApproximatelyEqual(a.BaseElevationOffsetMeters, b.BaseElevationOffsetMeters))
+                return false;
+
+            if (a.InclineDirection != b.InclineDirection)
+                return false;
+
+            if (!ApproximatelyEqual(a.InclinePercent, b.InclinePercent))
+                return false;
+
+            if (a.Lanes > 0 && b.Lanes > 0 && a.Lanes != b.Lanes)
+                return false;
+
+            return true;
+        }
+
+        private static bool AreCompatibleLabels(string a, string b)
+        {
+            a = (a ?? string.Empty).Trim();
+            b = (b ?? string.Empty).Trim();
+
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+                return true;
+
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ApproximatelyEqual(float a, float b, float tolerance = 0.001f)
+        {
+            return Math.Abs(a - b) <= tolerance;
+        }
+
+        private static bool IsStraightContinuation(OsmWay a, OsmWay b)
+        {
+            if (a == null || b == null || a.Points.Count < 2 || b.Points.Count < 2)
+                return true;
+
+            var aVector = a.Points[a.Points.Count - 1] - a.Points[a.Points.Count - 2];
+            var bVector = b.Points[1] - b.Points[0];
+            aVector.y = 0f;
+            bVector.y = 0f;
+
+            var aLength = math.length(aVector);
+            var bLength = math.length(bVector);
+            if (aLength <= 0.001f || bLength <= 0.001f)
+                return true;
+
+            var dot = math.dot(aVector / aLength, bVector / bLength);
+            return dot >= 0.95f;
         }
 
         private static bool TryReadLaneCount(string value, out int laneCount)
@@ -347,6 +739,14 @@ namespace cs2_osm_importer
             return !isArea && !string.IsNullOrEmpty(highway) && IsSupportedHighway(highway);
         }
 
+        private static bool TryReadSupportedRoadWay(XmlElement wayElement, bool useAllowedHighways, HashSet<string> allowedHighways, out string highway, out bool isArea)
+        {
+            if (!TryReadSupportedRoadWay(wayElement, out highway, out isArea))
+                return false;
+
+            return !useAllowedHighways || (allowedHighways != null && allowedHighways.Contains(highway));
+        }
+
         private static void IncludeBounds(OsmDocument document, OsmWay way)
         {
             foreach (var point in way.Points)
@@ -362,6 +762,299 @@ namespace cs2_osm_importer
                 document.Min = math.min(document.Min, point);
                 document.Max = math.max(document.Max, point);
             }
+        }
+
+        private static int NormalizeContiguousLaneCounts(List<OsmWay> ways)
+        {
+            if (ways == null || ways.Count == 0)
+                return 0;
+
+            const float endpointToleranceMeters = 20f;
+            var inferredLaneCount = 0;
+            var groups = ways
+                .Select((way, index) => (Way: way, Index: index, Key: GetLaneNormalizationKey(way)))
+                .Where(entry => !string.IsNullOrEmpty(entry.Key) && entry.Way.Points.Count >= 2)
+                .GroupBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var group in groups)
+            {
+                var entries = group.ToList();
+                if (entries.Count < 2)
+                    continue;
+
+                var parent = new int[entries.Count];
+                for (var i = 0; i < parent.Length; i++)
+                    parent[i] = i;
+
+                var endpointBuckets = BuildEndpointBuckets(entries, endpointToleranceMeters);
+
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    var way = entries[i].Way;
+                    if (way.Points.Count < 2)
+                        continue;
+
+                    UnionNearbyWays(entries, parent, endpointBuckets, i, way.Points[0], endpointToleranceMeters);
+                    UnionNearbyWays(entries, parent, endpointBuckets, i, way.Points[way.Points.Count - 1], endpointToleranceMeters);
+                }
+
+                var components = new Dictionary<int, List<int>>();
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    var root = Find(parent, i);
+                    if (!components.TryGetValue(root, out var component))
+                    {
+                        component = new List<int>();
+                        components[root] = component;
+                    }
+
+                    component.Add(i);
+                }
+
+                foreach (var component in components.Values)
+                {
+                    var laneCount = DetermineComponentLaneCount(entries, component);
+                    if (laneCount <= 0)
+                        continue;
+
+                    foreach (var entryIndex in component)
+                    {
+                        var way = entries[entryIndex].Way;
+                        if (way.HasExplicitLaneCount || way.Lanes > 0)
+                            continue;
+
+                        way.Lanes = laneCount;
+                        inferredLaneCount++;
+                    }
+                }
+            }
+
+            inferredLaneCount += NormalizeRemainingLaneCountsByHighway(ways);
+
+            return inferredLaneCount;
+        }
+
+        private static int NormalizeRemainingLaneCountsByHighway(List<OsmWay> ways)
+        {
+            const float endpointToleranceMeters = 20f;
+            var inferredLaneCount = 0;
+            var groups = ways
+                .Select((way, index) => (Way: way, Index: index, Key: (way.Highway ?? string.Empty).Trim()))
+                .Where(entry => !string.IsNullOrEmpty(entry.Key) && entry.Way.Points.Count >= 2)
+                .GroupBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var group in groups)
+            {
+                var entries = group.ToList();
+                if (entries.Count < 2)
+                    continue;
+
+                var parent = new int[entries.Count];
+                for (var i = 0; i < parent.Length; i++)
+                    parent[i] = i;
+
+                var endpointBuckets = BuildEndpointBuckets(entries, endpointToleranceMeters);
+
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    var way = entries[i].Way;
+                    if (way.Points.Count < 2)
+                        continue;
+
+                    UnionNearbyWays(entries, parent, endpointBuckets, i, way.Points[0], endpointToleranceMeters);
+                    UnionNearbyWays(entries, parent, endpointBuckets, i, way.Points[way.Points.Count - 1], endpointToleranceMeters);
+                }
+
+                var components = new Dictionary<int, List<int>>();
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    var root = Find(parent, i);
+                    if (!components.TryGetValue(root, out var component))
+                    {
+                        component = new List<int>();
+                        components[root] = component;
+                    }
+
+                    component.Add(i);
+                }
+
+                foreach (var component in components.Values)
+                {
+                    var laneCount = DetermineComponentLaneCount(entries, component);
+                    if (laneCount <= 0)
+                        continue;
+
+                    foreach (var entryIndex in component)
+                    {
+                        var way = entries[entryIndex].Way;
+                        if (way.HasExplicitLaneCount || way.Lanes > 0)
+                            continue;
+
+                        way.Lanes = laneCount;
+                        inferredLaneCount++;
+                    }
+                }
+            }
+
+            return inferredLaneCount;
+        }
+
+        private static Dictionary<string, List<int>> BuildEndpointBuckets(
+            List<(OsmWay Way, int Index, string Key)> entries,
+            float toleranceMeters)
+        {
+            var buckets = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var way = entries[i].Way;
+                AddBucketEntry(buckets, MakeLaneEndpointBucketKey(entries[i].Key, way.Points[0], toleranceMeters), i);
+                AddBucketEntry(buckets, MakeLaneEndpointBucketKey(entries[i].Key, way.Points[way.Points.Count - 1], toleranceMeters), i);
+            }
+
+            return buckets;
+        }
+
+        private static void UnionNearbyWays(
+            List<(OsmWay Way, int Index, string Key)> entries,
+            int[] parent,
+            Dictionary<string, List<int>> buckets,
+            int wayIndex,
+            float3 point,
+            float toleranceMeters)
+        {
+            var roadKey = entries[wayIndex].Key;
+            var binX = (int)Math.Floor(point.x / toleranceMeters);
+            var binZ = (int)Math.Floor(point.z / toleranceMeters);
+
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                for (var dz = -1; dz <= 1; dz++)
+                {
+                    var key = MakeLaneEndpointBucketKey(roadKey, binX + dx, binZ + dz);
+                    if (!buckets.TryGetValue(key, out var candidates))
+                        continue;
+
+                    foreach (var candidateIndex in candidates)
+                    {
+                        if (candidateIndex == wayIndex)
+                            continue;
+
+                        if (!EndpointsWithinTolerance(entries[wayIndex].Way, entries[candidateIndex].Way, toleranceMeters))
+                            continue;
+
+                        Union(parent, wayIndex, candidateIndex);
+                    }
+                }
+            }
+        }
+
+        private static void AddBucketEntry(Dictionary<string, List<int>> buckets, string key, int index)
+        {
+            if (!buckets.TryGetValue(key, out var list))
+            {
+                list = new List<int>();
+                buckets[key] = list;
+            }
+
+            list.Add(index);
+        }
+
+        private static string MakeLaneEndpointBucketKey(string roadKey, float3 point, float toleranceMeters)
+        {
+            var binX = (int)Math.Floor(point.x / toleranceMeters);
+            var binZ = (int)Math.Floor(point.z / toleranceMeters);
+            return MakeLaneEndpointBucketKey(roadKey, binX, binZ);
+        }
+
+        private static string MakeLaneEndpointBucketKey(string roadKey, int binX, int binZ)
+        {
+            return $"{roadKey}|{binX}|{binZ}";
+        }
+
+        private static bool EndpointsWithinTolerance(OsmWay a, OsmWay b, float toleranceMeters)
+        {
+            if (a == null || b == null || a.Points.Count < 2 || b.Points.Count < 2)
+                return false;
+
+            var aStart = a.Points[0];
+            var aEnd = a.Points[a.Points.Count - 1];
+            var bStart = b.Points[0];
+            var bEnd = b.Points[b.Points.Count - 1];
+
+            var toleranceSq = toleranceMeters * toleranceMeters;
+            return math.distancesq(aStart, bStart) <= toleranceSq ||
+                   math.distancesq(aStart, bEnd) <= toleranceSq ||
+                   math.distancesq(aEnd, bStart) <= toleranceSq ||
+                   math.distancesq(aEnd, bEnd) <= toleranceSq;
+        }
+
+        private static int DetermineComponentLaneCount(List<(OsmWay Way, int Index, string Key)> entries, List<int> component)
+        {
+            var counts = new Dictionary<int, int>();
+
+            foreach (var entryIndex in component)
+            {
+                var way = entries[entryIndex].Way;
+                if (way.Lanes <= 0)
+                    continue;
+
+                counts.TryGetValue(way.Lanes, out var count);
+                counts[way.Lanes] = count + 1;
+            }
+
+            if (counts.Count == 0)
+                return 0;
+
+            var bestLane = 0;
+            var bestCount = 0;
+            var tied = false;
+
+            foreach (var pair in counts)
+            {
+                if (pair.Value > bestCount)
+                {
+                    bestCount = pair.Value;
+                    bestLane = pair.Key;
+                    tied = false;
+                    continue;
+                }
+
+                if (pair.Value == bestCount)
+                    tied = true;
+            }
+
+            return tied ? 0 : bestLane;
+        }
+
+        private static int Find(int[] parent, int index)
+        {
+            if (parent[index] != index)
+                parent[index] = Find(parent, parent[index]);
+
+            return parent[index];
+        }
+
+        private static void Union(int[] parent, int a, int b)
+        {
+            var rootA = Find(parent, a);
+            var rootB = Find(parent, b);
+            if (rootA == rootB)
+                return;
+
+            parent[rootB] = rootA;
+        }
+
+        private static string GetLaneNormalizationKey(OsmWay way)
+        {
+            if (way == null)
+                return string.Empty;
+
+            var roadLabel = !string.IsNullOrWhiteSpace(way.Name) ? way.Name.Trim() : way.Ref.Trim();
+            if (string.IsNullOrWhiteSpace(roadLabel))
+                return string.Empty;
+
+            return $"{way.Highway.Trim()}|{roadLabel}";
         }
 
         private static bool IsSupportedHighway(string highway)
@@ -537,6 +1230,7 @@ namespace cs2_osm_importer
         }
 
         private static float EstimateBaseElevationOffset(
+            OsmImportOptions options,
             bool hasLayer,
             int layer,
             bool isBridge,
@@ -549,22 +1243,22 @@ namespace cs2_osm_importer
 
             if (hasLayer && layer != 0)
             {
-                offset += layer * LayerElevationStepMeters;
+                offset += layer * options.LayerElevationStepMeters;
             }
             else if (isBridge)
             {
-                offset += BridgeElevationMeters;
+                offset += options.BridgeElevationMeters;
             }
             else if (isTunnel || isCovered)
             {
-                offset -= isTunnel ? TunnelDepthMeters : CoveredDepthMeters;
+                offset -= isTunnel ? options.TunnelDepthMeters : options.CoveredDepthMeters;
             }
 
             if (isEmbankment)
-                offset += EmbankmentElevationMeters;
+                offset += options.EmbankmentElevationMeters;
 
             if (isCutting)
-                offset -= CuttingDepthMeters;
+                offset -= options.CuttingDepthMeters;
 
             return offset;
         }

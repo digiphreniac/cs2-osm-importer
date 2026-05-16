@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -83,6 +84,9 @@ namespace cs2_osm_importer
         private void LoadOSMData(string payload)
         {
             var options = ParseImportOptions(payload);
+            foreach (var highwayType in ReadStringArray(payload, "importRoadTypes"))
+                options.ImportHighwayTypes.Add(highwayType);
+
             if (!_importSystem.LoadOsmData(new OsmImportOptions
             {
                 Path = options.Path,
@@ -90,6 +94,7 @@ namespace cs2_osm_importer
                 CurveToleranceMeters = options.CurveToleranceMeters,
                 ScaleFactor = options.ScaleFactor <= 0f ? 1f : options.ScaleFactor,
                 ElevationMeters = 0.2f,
+                ImportHighwayTypes = options.ImportHighwayTypes,
                 MaxWays = options.MaxWays <= 0 ? 10000 : options.MaxWays
             }))
             {
@@ -136,12 +141,23 @@ namespace cs2_osm_importer
 
         private static OsmImportOptions ParseImportOptions(string payload)
         {
+            var hasImportRoadTypes = Regex.IsMatch(payload ?? string.Empty, "\"importRoadTypes\"\\s*:");
+            var importRoadTypes = new HashSet<string>(ReadStringArray(payload, "importRoadTypes"), StringComparer.OrdinalIgnoreCase);
+
             return new OsmImportOptions
             {
                 Path = ReadString(payload, "path"),
                 SimplifyToleranceMeters = ReadFloat(payload, "tolerance", 1f),
                 CurveToleranceMeters = ReadFloat(payload, "curveTolerance", 0.5f),
                 ScaleFactor = ReadFloat(payload, "scaleFactor", 1f),
+                UseImportHighwayTypesFilter = hasImportRoadTypes,
+                LayerElevationStepMeters = ReadFloat(payload, "layerElevationStep", 6f),
+                BridgeElevationMeters = ReadFloat(payload, "bridgeElevation", 6f),
+                TunnelDepthMeters = ReadFloat(payload, "tunnelDepth", 6f),
+                CoveredDepthMeters = ReadFloat(payload, "coveredDepth", 5f),
+                EmbankmentElevationMeters = ReadFloat(payload, "embankmentElevation", 3f),
+                CuttingDepthMeters = ReadFloat(payload, "cuttingDepth", 3f),
+                ImportHighwayTypes = importRoadTypes,
                 MaxWays = ReadInt(payload, "maxWays", 10000)
             };
         }
