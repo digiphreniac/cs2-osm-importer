@@ -70,6 +70,7 @@ namespace cs2_osm_importer
         private IWidget _generateRoadTypeSelectionWidget;
         private RoadTypeFilterAdapter _generateRoadTypeFilterAdapter;
         private Label _generateRoadTypesInstructionLabel;
+        private Label _waysToCreateLabel;
         private FloatSliderField _simplifyToleranceField;
         private FloatSliderField _curveToleranceField;
         private FloatSliderField _scaleFactorField;
@@ -91,6 +92,9 @@ namespace cs2_osm_importer
         };
         private string _lastRoadTypeCountsJson = string.Empty;
         private bool _lastHasLoadedData;
+        private bool _lastHasGeneratedAssets;
+        private HashSet<string> _generatedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> _pendingGeneratedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _pathValue;
         private double _simplifyToleranceValue = 1d;
         private double _curveToleranceValue = 0.5d;
@@ -148,6 +152,8 @@ namespace cs2_osm_importer
                 UpdateRoadTypeCounts();
                 UpdateStatus(_importSystem.Status);
                 UpdateControlStates();
+                UpdateGeneratedState();
+                UpdateWaysToGenerateLabel();
             }
 
         }
@@ -426,15 +432,23 @@ namespace cs2_osm_importer
                 level = Label.Level.SubTitle,
             };
 
+            _waysToCreateLabel = new Label
+            {
+                displayName = GetWaysToGenerateText(),
+                level = Label.Level.SubTitle,
+            };
+
             var generateSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
                 expanded = true,
+                disabled = () => !_importSystem.HasLoadedData,
                 children = new List<IWidget>
                 {
                     _generateRoadTypesInstructionLabel,
                     supportedTypesLabel,
                     _generateRoadTypeSelectionWidget,
+                    _waysToCreateLabel,
                     _generateButton,
                     _deleteButton,
                 },
@@ -507,8 +521,9 @@ namespace cs2_osm_importer
 
         private void GenerateRoads()
         {
+            var selectedTypes = GetSelectedGenerateRoadTypes().ToList();
             var options = new OsmGenerateOptions();
-            foreach (var roadType in GetSelectedGenerateRoadTypes())
+            foreach (var roadType in selectedTypes)
             {
                 options.HighwayTypes.Add(roadType);
             }
@@ -518,6 +533,10 @@ namespace cs2_osm_importer
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.OperationInProgress", "An OSM operation is already running."));
                 return;
             }
+
+            _pendingGeneratedRoadTypes.Clear();
+            foreach (var roadType in selectedTypes)
+                _pendingGeneratedRoadTypes.Add(roadType);
 
             UpdateStatus(_importSystem.Status);
         }
@@ -584,6 +603,7 @@ namespace cs2_osm_importer
             selections[roadType] = selected;
             BumpFieldVersion();
             SyncRoadTypeFilterAdapters();
+            RefreshSelectedRoadTypes();
         }
 
         private IEnumerable<string> GetSelectedImportRoadTypes()
@@ -649,16 +669,65 @@ namespace cs2_osm_importer
             var hasGeneratedAssets = _importSystem.HasGeneratedAssets;
 
             if (_loadButton != null)
-                _loadButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid;
+                _loadButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid || _importRoadTypeSelections.Values.All(v => !v);
 
             if (_resetDefaultsButton != null)
                 _resetDefaultsButton.disabled = () => isBusy;
 
             if (_generateButton != null)
-                _generateButton.disabled = () => isBusy || !hasLoadedData;
+                _generateButton.disabled = () => isBusy || !hasLoadedData || _generateRoadTypeSelections.Values.All(v => !v);
 
             if (_deleteButton != null)
                 _deleteButton.disabled = () => !hasGeneratedAssets;
+        }
+
+        private void UpdateGeneratedState()
+        {
+            if (_importSystem == null)
+                return;
+
+            var hasGeneratedAssets = _importSystem.HasGeneratedAssets;
+
+            if (hasGeneratedAssets && !_lastHasGeneratedAssets)
+            {
+                foreach (var roadType in _pendingGeneratedRoadTypes)
+                {
+                    _generatedRoadTypes.Add(roadType);
+                    _generateRoadTypeSelections[roadType] = false;
+                }
+                _pendingGeneratedRoadTypes.Clear();
+                SyncRoadTypeFilterAdapters();
+                RefreshSelectedRoadTypes();
+            }
+            else if (!hasGeneratedAssets && _lastHasGeneratedAssets)
+            {
+                _generatedRoadTypes.Clear();
+                _pendingGeneratedRoadTypes.Clear();
+                SyncRoadTypeFilterAdapters();
+                RefreshSelectedRoadTypes();
+            }
+
+            _lastHasGeneratedAssets = hasGeneratedAssets;
+        }
+
+        private void UpdateWaysToGenerateLabel()
+        {
+            if (_waysToCreateLabel == null)
+                return;
+
+            _waysToCreateLabel.displayName = GetWaysToGenerateText();
+        }
+
+        private string GetWaysToGenerateText()
+        {
+            if (_importSystem?.RoadTypeCountsByType == null || _importSystem.RoadTypeCountsByType.Count == 0)
+                return string.Empty;
+
+            var total = GetSelectedGenerateRoadTypes()
+                .Select(roadType => _importSystem.RoadTypeCountsByType.TryGetValue(roadType ?? string.Empty, out var count) ? count : 0)
+                .Sum();
+
+            return OsmLocalization.F("OsmImporter.Label.WaysToGenerate", "Ways to generate: {0}", total);
         }
 
         private void SetPathValue(string value)
@@ -795,7 +864,7 @@ namespace cs2_osm_importer
 
         private IWidget BuildImportRoadTypeSelectionWidget()
         {
-            _importRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _importRoadTypeSelections);
+            _importRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _importRoadTypeSelections, false);
             _importRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableImportRoadTypes());
             _importRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedImportRoadTypes());
 
@@ -807,7 +876,7 @@ namespace cs2_osm_importer
 
         private IWidget BuildGenerateRoadTypeSelectionWidget()
         {
-            _generateRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _generateRoadTypeSelections);
+            _generateRoadTypeFilterAdapter ??= new RoadTypeFilterAdapter(this, _generateRoadTypeSelections, true);
             _generateRoadTypeFilterAdapter.SyncAvailableRoadTypes(GetAvailableGenerateRoadTypes());
             _generateRoadTypeFilterAdapter.SyncActiveRoadTypes(GetSelectedGenerateRoadTypes());
 
@@ -828,9 +897,13 @@ namespace cs2_osm_importer
         {
             // The generate filter only exposes road types that the most recent import actually
             // produced. Before any import (or after a failed/empty import) the list stays empty.
+            // Already-generated road types are excluded so they can't be toggled again.
             if (_importSystem?.HasLoadedData == true && _importSystem.RoadTypeCountsByType != null && _importSystem.RoadTypeCountsByType.Count > 0)
             {
-                return _roadTypesOrder.Where(roadType => _importSystem.RoadTypeCountsByType.TryGetValue(roadType, out var count) && count > 0);
+                return _roadTypesOrder.Where(roadType =>
+                    _importSystem.RoadTypeCountsByType.TryGetValue(roadType, out var count)
+                    && count > 0
+                    && !_generatedRoadTypes.Contains(roadType));
             }
 
             return Array.Empty<string>();
@@ -1225,11 +1298,13 @@ namespace cs2_osm_importer
             private readonly OsmImportPanelSystem _panel;
             private readonly Dictionary<string, bool> _selections;
             private readonly Dictionary<string, string> _displayToRoadType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            private readonly bool _includeCounts;
 
-            public RoadTypeFilterAdapter(OsmImportPanelSystem panel, Dictionary<string, bool> selections)
+            public RoadTypeFilterAdapter(OsmImportPanelSystem panel, Dictionary<string, bool> selections, bool includeCounts = false)
             {
                 _panel = panel;
                 _selections = selections;
+                _includeCounts = includeCounts;
             }
 
             public List<string> availableFilters { get; } = new List<string>();
@@ -1245,7 +1320,7 @@ namespace cs2_osm_importer
 
                 foreach (var roadType in roadTypes ?? Array.Empty<string>())
                 {
-                    var displayName = OsmImportPanelSystem.GetRoadTypeDisplayName(roadType);
+                    var displayName = FormatDisplayNameWithCount(roadType);
                     if (_displayToRoadType.ContainsKey(displayName))
                         continue;
 
@@ -1263,12 +1338,25 @@ namespace cs2_osm_importer
 
                 foreach (var roadType in roadTypes ?? Array.Empty<string>())
                 {
-                    var displayName = OsmImportPanelSystem.GetRoadTypeDisplayName(roadType);
+                    var displayName = FormatDisplayNameWithCount(roadType);
                     if (!_displayToRoadType.ContainsKey(displayName) || activeFilters.Contains(displayName))
                         continue;
 
                     activeFilters.Add(displayName);
                 }
+            }
+
+            private string FormatDisplayNameWithCount(string roadType)
+            {
+                var displayName = OsmImportPanelSystem.GetRoadTypeDisplayName(roadType);
+                if (_includeCounts
+                    && _panel._importSystem?.RoadTypeCountsByType != null
+                    && _panel._importSystem.RoadTypeCountsByType.TryGetValue(roadType ?? string.Empty, out var count)
+                    && count > 0)
+                {
+                    return FormatRoadTypeLabel(displayName, count);
+                }
+                return displayName;
             }
 
             public void ToggleFilter(string filter, bool active)

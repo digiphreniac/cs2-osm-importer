@@ -26,6 +26,7 @@
   "OsmImporter.Label.CuttingDepth": "Cutting depth (m)",
   "OsmImporter.Label.GenerateInstructions": "Choose which loaded road types should be generated.",
   "OsmImporter.Label.GenerateRoads": "Generate Roads",
+  "OsmImporter.Label.WaysToGenerate": "Ways to generate: {0}",
   "OsmImporter.Label.ImportData": "Import data",
   "OsmImporter.Label.ImportHeader": "OSM Import Tool",
   "OsmImporter.Label.ImportInstructions": "Pick an OSM input file and configure how the data is parsed before loading it into the game.",
