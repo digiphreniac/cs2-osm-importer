@@ -13,6 +13,7 @@ namespace cs2_osm_importer
         private const double EarthRadiusMeters = 6378137d;
         private const float MaxTerrainSegmentLengthMeters = 15f;
         private const float DefaultInclinePercent = 4f;
+        private const float RampLengthMeters = 60f;
 
         private sealed class GeoNode
         {
@@ -136,10 +137,9 @@ namespace cs2_osm_importer
             var mergedWays = MergeSimpleConnectedWays(parsedWays, out var mergedWayCount);
             if (mergedWayCount > 0)
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
-            if (mergedWayCount > 0)
-                document.Ways.AddRange(mergedWays);
-            else
-                document.Ways.AddRange(parsedWays);
+            var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
+            HarmonizeGroupElevations(finalWays);
+            document.Ways.AddRange(finalWays);
 
             if (document.Ways.Count > Math.Max(1, options.MaxWays))
                 document.Ways.RemoveRange(Math.Max(1, options.MaxWays), document.Ways.Count - Math.Max(1, options.MaxWays));
@@ -250,6 +250,10 @@ namespace cs2_osm_importer
 
             if (string.IsNullOrEmpty(way.Highway))
                 way.Highway = wayRailway;
+            else if (!string.IsNullOrEmpty(wayRailway) &&
+                     !string.Equals(way.Highway, wayRailway, StringComparison.OrdinalIgnoreCase) &&
+                     IsElevatedRailType(wayRailway))
+                way.Highway = wayRailway;
 
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
@@ -265,6 +269,8 @@ namespace cs2_osm_importer
 
             way.BaseElevationOffsetMeters = EstimateBaseElevationOffset(
                 options,
+                way.Highway,
+                wayRailway,
                 hasLayer,
                 layer,
                 isBridge,
@@ -272,7 +278,17 @@ namespace cs2_osm_importer
                 isCovered,
                 isEmbankment,
                 isCutting);
-            way.UsesStructuralElevation = hasLayer || isBridge || isTunnel || isCovered || isEmbankment || isCutting;
+            way.UsesStructuralElevation = (hasLayer || isBridge || isTunnel || isCovered || isEmbankment || isCutting) &&
+                                          !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
+
+            if (way.Highway is "monorail" or "light_rail" or "subway" || wayRailway is "monorail" or "light_rail" or "subway")
+            {
+                Mod.log.Info(
+                    $"OSM WAY: Highway=\"{way.Highway}\" Railway=\"{wayRailway}\" " +
+                    $"Offset={way.BaseElevationOffsetMeters:F1}m Structural={way.UsesStructuralElevation} " +
+                    $"Layer={layer}(hasLayer={hasLayer}) Bridge={isBridge} Tunnel={isTunnel}");
+            }
+
             way.InclineDirection = inclineDirection;
             way.InclinePercent = inclinePercent;
             way.TerrainHeights.Clear();
@@ -297,7 +313,6 @@ namespace cs2_osm_importer
                 currentPoint.y = sampleHeight != null
                     ? sampleHeight(currentPoint)
                     : options.ElevationMeters;
-                way.TerrainHeights.Add(currentPoint.y);
 
                 if (sampleHeight != null && way.Points.Count > 0)
                 {
@@ -312,6 +327,7 @@ namespace cs2_osm_importer
                 else
                 {
                     way.Points.Add(currentPoint);
+                    way.TerrainHeights.Add(currentPoint.y);
                 }
             }
 
@@ -639,6 +655,84 @@ namespace cs2_osm_importer
             }
 
             return merged.Points.Count >= 2 ? merged : null;
+        }
+
+        private static void HarmonizeGroupElevations(List<OsmWay> ways)
+        {
+            if (ways.Count < 2)
+                return;
+
+            var nodeToWays = new Dictionary<long, List<(int index, bool isStart)>>();
+            for (var i = 0; i < ways.Count; i++)
+            {
+                var way = ways[i];
+                if (way.NodeIds.Count < 2)
+                    continue;
+
+                var e0 = way.NodeIds[0];
+                var e1 = way.NodeIds[way.NodeIds.Count - 1];
+
+                if (!nodeToWays.TryGetValue(e0, out var l0))
+                    nodeToWays[e0] = l0 = new List<(int, bool)>();
+                l0.Add((i, true));
+
+                if (e0 != e1)
+                {
+                    if (!nodeToWays.TryGetValue(e1, out var l1))
+                        nodeToWays[e1] = l1 = new List<(int, bool)>();
+                    l1.Add((i, false));
+                }
+            }
+
+            foreach (var kvp in nodeToWays)
+            {
+                var entries = kvp.Value;
+                if (entries.Count < 2)
+                    continue;
+
+                for (var a = 0; a < entries.Count; a++)
+                {
+                    for (var b = a + 1; b < entries.Count; b++)
+                    {
+                        var wayA = ways[entries[a].index];
+                        var wayB = ways[entries[b].index];
+                        if (ApproximatelyEqual(wayA.BaseElevationOffsetMeters, wayB.BaseElevationOffsetMeters))
+                            continue;
+
+                        var higherWay = wayA.BaseElevationOffsetMeters > wayB.BaseElevationOffsetMeters ? wayA : wayB;
+                        var lowerWay = wayA.BaseElevationOffsetMeters > wayB.BaseElevationOffsetMeters ? wayB : wayA;
+                        var isLowerStart = higherWay == wayA ? entries[b].isStart : entries[a].isStart;
+
+                        var delta = higherWay.BaseElevationOffsetMeters - lowerWay.BaseElevationOffsetMeters;
+                        var startIdx = isLowerStart ? 0 : lowerWay.Points.Count - 1;
+                        var step = isLowerStart ? 1 : -1;
+
+                        var accumulated = 0f;
+                        var idx = startIdx;
+                        while (idx >= 0 && idx < lowerWay.Points.Count)
+                        {
+                            if (idx != startIdx)
+                            {
+                                var prev = idx - step;
+                                accumulated += math.distance(
+                                    new float2(lowerWay.Points[prev].x, lowerWay.Points[prev].z),
+                                    new float2(lowerWay.Points[idx].x, lowerWay.Points[idx].z));
+                            }
+
+                            var t = math.saturate(accumulated / RampLengthMeters);
+                            var weight = 1f - (t * t * (3f - 2f * t));
+                            if (weight < 0.001f)
+                                break;
+
+                            var p = lowerWay.Points[idx];
+                            p.y += delta * weight;
+                            lowerWay.Points[idx] = p;
+
+                            idx += step;
+                        }
+                    }
+                }
+            }
         }
 
         private static bool CanMergeWays(OsmWay a, OsmWay b)
@@ -1253,6 +1347,8 @@ namespace cs2_osm_importer
 
         private static float EstimateBaseElevationOffset(
             OsmImportOptions options,
+            string highwayType,
+            string railwayType,
             bool hasLayer,
             int layer,
             bool isBridge,
@@ -1282,7 +1378,17 @@ namespace cs2_osm_importer
             if (isCutting)
                 offset -= options.CuttingDepthMeters;
 
+            if (!hasLayer && offset == 0f && (IsElevatedRailType(highwayType) || IsElevatedRailType(railwayType)))
+                offset += options.LayerElevationStepMeters;
+
             return offset;
+        }
+
+        private static bool IsElevatedRailType(string type)
+        {
+            return string.Equals(type, "monorail", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(type, "light_rail", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(type, "subway", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsTruthy(string value)

@@ -17,10 +17,10 @@ namespace cs2_osm_importer
         public float CurveToleranceMeters { get; set; } = 0.5f;
         public float ScaleFactor { get; set; } = 1f;
         public float ElevationMeters { get; set; } = 0.2f;
-        public float LayerElevationStepMeters { get; set; } = 6f;
-        public float BridgeElevationMeters { get; set; } = 6f;
-        public float TunnelDepthMeters { get; set; } = 6f;
-        public float CoveredDepthMeters { get; set; } = 5f;
+        public float LayerElevationStepMeters { get; set; } = 10f;
+        public float BridgeElevationMeters { get; set; } = 10f;
+        public float TunnelDepthMeters { get; set; } = 10f;
+        public float CoveredDepthMeters { get; set; } = 10f;
         public float EmbankmentElevationMeters { get; set; } = 3f;
         public float CuttingDepthMeters { get; set; } = 3f;
         public bool UseImportHighwayTypesFilter { get; set; }

@@ -113,9 +113,9 @@ namespace cs2_osm_importer
         private double _curveToleranceValue = 0.5d;
         private double _scaleFactorValue = 1d;
         private int _maxWaysValue = 10000;
-        private double _layerElevationStepValue = 6d;
-        private double _bridgeElevationValue = 6d;
-        private double _tunnelDepthValue = 6d;
+        private double _layerElevationStepValue = 10d;
+        private double _bridgeElevationValue = 10d;
+        private double _tunnelDepthValue = 10d;
         private double _coveredDepthValue = 5d;
         private double _embankmentElevationValue = 3d;
         private double _cuttingDepthValue = 3d;
@@ -604,10 +604,10 @@ namespace cs2_osm_importer
             SetCurveToleranceValue(0.5d);
             SetScaleFactorValue(1d);
             SetMaxWaysValue(10000);
-            SetLayerElevationStepValue(6d);
-            SetBridgeElevationValue(6d);
-            SetTunnelDepthValue(6d);
-            SetCoveredDepthValue(5d);
+            SetLayerElevationStepValue(10d);
+            SetBridgeElevationValue(10d);
+            SetTunnelDepthValue(10d);
+            SetCoveredDepthValue(10d);
             SetEmbankmentElevationValue(3d);
             SetCuttingDepthValue(3d);
             ResetAdvancedSettingsSection();
@@ -1431,8 +1431,11 @@ namespace cs2_osm_importer
             public void ClearFilters()
             {
                 foreach (var roadType in _displayToRoadType.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
-                    _panel.SetRoadTypeSelection(_selections, roadType, false);
+                    _selections[roadType] = false;
 
+                _panel.BumpFieldVersion();
+                _panel.SyncRoadTypeFilterAdapters();
+                _panel.RefreshSelectedRoadTypes();
                 SyncActiveRoadTypes(Array.Empty<string>());
             }
         }

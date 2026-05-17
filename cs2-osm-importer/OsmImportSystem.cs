@@ -331,15 +331,25 @@ namespace cs2_osm_importer
 
                         while (_pointIndex < way.Points.Count - 1)
                         {
+                            var mergeEnd = _pointIndex + 1;
+                            if (way.UsesStructuralElevation)
+                            {
+                                while (mergeEnd + 1 < way.Points.Count &&
+                                       PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))
+                                {
+                                    mergeEnd++;
+                                }
+                            }
+
                             var segStart = way.Points[_pointIndex];
-                            var segEnd = way.Points[_pointIndex + 1];
+                            var segEnd = way.Points[mergeEnd];
                             var terrainStart = _pointIndex < way.TerrainHeights.Count
                                 ? way.TerrainHeights[_pointIndex] : segStart.y;
-                            var terrainEnd = (_pointIndex + 1) < way.TerrainHeights.Count
-                                ? way.TerrainHeights[_pointIndex + 1] : segEnd.y;
+                            var terrainEnd = mergeEnd < way.TerrainHeights.Count
+                                ? way.TerrainHeights[mergeEnd] : segEnd.y;
                             var created = CreateNetCourseDefinition(
                                 segStart, segEnd, typePrefab, way.BaseElevationOffsetMeters);
-                            _pointIndex++;
+                            _pointIndex = mergeEnd;
                             if (created != Entity.Null)
                             {
                                 HasGeneratedAssets = true;
@@ -663,6 +673,18 @@ namespace cs2_osm_importer
             var dx = point.x - closest.x;
             var dz = point.z - closest.z;
             return dx * dx + dz * dz;
+        }
+
+        private static bool PointsAreCollinear(float3 prev, float3 mid, float3 next, float cosAngle)
+        {
+            var d1 = new float2(mid.x - prev.x, mid.z - prev.z);
+            var d2 = new float2(next.x - mid.x, next.z - mid.z);
+            var len1 = math.lengthsq(d1);
+            var len2 = math.lengthsq(d2);
+            if (len1 < 0.01f || len2 < 0.01f)
+                return true;
+            var dot = math.dot(d1, d2) / (math.sqrt(len1 * len2));
+            return dot >= cosAngle;
         }
 
         private struct RoadEdgePosition
@@ -1451,6 +1473,7 @@ namespace cs2_osm_importer
                 case "track":
                     return new[] { "Gravel Road", "GravelRoad", "Gravel Oneway Road", "GravelOnewayRoad", "SmallRoad", "Small Road", "Road", "Street" };
                 case "monorail":
+                    return new[] { "Oneway Train Track", "OnewayTrainTrack", "Monorail Track", "MonorailTrack", "Monorail", "TwoWay Train Track", "TwoWayTrainTrack", "Train Track", "TrainTrack", "Double Train Track", "DoubleTrainTrack" };
                 case "rail":
                 case "subway":
                     return new[] { "Train Track", "TrainTrack", "Train", "Double Train Track", "DoubleTrainTrack", "Oneway Train Track", "OnewayTrainTrack", "TwoWay Train Track", "TwoWayTrainTrack" };
@@ -1488,6 +1511,10 @@ namespace cs2_osm_importer
             {
                 return false;
             }
+
+            // Monorail should use single track, not double
+            if (highwayType is "monorail" && lower.Contains("double"))
+                return false;
 
             // Railway prefabs naturally contain "track" in their names (e.g. TrainTrack)
             if (!(highwayType is "rail" or "monorail" or "light_rail" or "subway" or "tram") && lower.Contains("track"))
