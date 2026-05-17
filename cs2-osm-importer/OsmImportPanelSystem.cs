@@ -31,6 +31,16 @@ namespace cs2_osm_importer
             "primary_link",
             "secondary_link",
             "tertiary_link",
+            "footway",
+            "bridleway",
+            "monorail",
+            "rail",
+            "light_rail",
+            "subway",
+            "tram",
+            "track",
+            "cycleway",
+            "pedestrian",
         };
 
         internal static readonly Dictionary<string, RoadTypeMetadata> RoadTypeMetadataByType =
@@ -51,6 +61,16 @@ namespace cs2_osm_importer
                 { "primary_link", new RoadTypeMetadata("OsmImporter.RoadType.PrimaryLink.Name", "Primary link", "OsmImporter.RoadType.PrimaryLink.Description", "Connector between primary roads and the wider network.", "Media/Game/Icons/MediumRoadOneway.svg") },
                 { "secondary_link", new RoadTypeMetadata("OsmImporter.RoadType.SecondaryLink.Name", "Secondary link", "OsmImporter.RoadType.SecondaryLink.Description", "Connector between secondary roads and local streets.", "Media/Game/Icons/SmallRoad.svg") },
                 { "tertiary_link", new RoadTypeMetadata("OsmImporter.RoadType.TertiaryLink.Name", "Tertiary link", "OsmImporter.RoadType.TertiaryLink.Description", "Connector between tertiary roads and nearby local access.", "Media/Game/Icons/SmallRoadOneway1lane.svg") },
+                { "footway", new RoadTypeMetadata("OsmImporter.RoadType.Footway.Name", "Footway", "OsmImporter.RoadType.Footway.Description", "Path designed for pedestrians, often separate from the road network.", "Media/Game/Icons/Pathways.svg") },
+                { "bridleway", new RoadTypeMetadata("OsmImporter.RoadType.Bridleway.Name", "Bridleway", "OsmImporter.RoadType.Bridleway.Description", "Path intended for horse riding, also open to pedestrians.", "Media/Game/Icons/Pathways.svg") },
+                { "monorail", new RoadTypeMetadata("OsmImporter.RoadType.Monorail.Name", "Monorail", "OsmImporter.RoadType.Monorail.Description", "Single-rail railway system for passenger transport.", "Media/Game/Icons/Train.svg") },
+                { "rail", new RoadTypeMetadata("OsmImporter.RoadType.Rail.Name", "Rail", "OsmImporter.RoadType.Rail.Description", "Standard railway track for passenger and freight trains.", "Media/Game/Icons/TwoWayTrainTrack.svg") },
+                { "light_rail", new RoadTypeMetadata("OsmImporter.RoadType.LightRail.Name", "Light rail", "OsmImporter.RoadType.LightRail.Description", "Urban rail system that combines tram-like flexibility with higher capacity.", "Media/Game/Icons/DoubleTramTrack.svg") },
+                { "subway", new RoadTypeMetadata("OsmImporter.RoadType.Subway.Name", "Subway", "OsmImporter.RoadType.Subway.Description", "Underground metro system for high-capacity urban transit.", "Media/Game/Icons/DoubleTrainTrack.svg") },
+                { "tram", new RoadTypeMetadata("OsmImporter.RoadType.Tram.Name", "Tram", "OsmImporter.RoadType.Tram.Description", "Street-running light rail system for city transport.", "Media/Game/Icons/DoubleTramTrack.svg") },
+                { "track", new RoadTypeMetadata("OsmImporter.RoadType.Track.Name", "Track", "OsmImporter.RoadType.Track.Description", "Unpaved or rough rural road used for agriculture and forestry.", "Media/Game/Icons/GravelRoad.svg") },
+                { "cycleway", new RoadTypeMetadata("OsmImporter.RoadType.Cycleway.Name", "Cycleway", "OsmImporter.RoadType.Cycleway.Description", "Dedicated path or lane for bicycle traffic.", "Media/Game/Icons/TwoWayBikePath.svg") },
+                { "pedestrian", new RoadTypeMetadata("OsmImporter.RoadType.Pedestrian.Name", "Pedestrian", "OsmImporter.RoadType.Pedestrian.Description", "Street or zone reserved for pedestrian use.", "Media/Game/Icons/PedestrianStreet.svg") },
             };
 
         private OsmImportSystem _importSystem;

@@ -193,6 +193,7 @@ namespace cs2_osm_importer
             var hasExplicitLaneCount = false;
             var forwardLaneCount = 0;
             var backwardLaneCount = 0;
+            var wayRailway = string.Empty;
             var tags = wayElement.SelectNodes("tag");
 
             if (tags != null)
@@ -240,10 +241,15 @@ namespace cs2_osm_importer
                     {
                         // parsed above
                     }
+                    else if (key == "railway")
+                        wayRailway = value;
                     else if (key == "area" && value == "yes")
                         isArea = true;
                 }
             }
+
+            if (string.IsNullOrEmpty(way.Highway))
+                way.Highway = wayRailway;
 
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
@@ -720,6 +726,7 @@ namespace cs2_osm_importer
         {
             highway = string.Empty;
             isArea = false;
+            var railway = string.Empty;
             var tags = wayElement.SelectNodes("tag");
 
             if (tags != null)
@@ -731,10 +738,15 @@ namespace cs2_osm_importer
 
                     if (key == "highway")
                         highway = value;
+                    else if (key == "railway")
+                        railway = value;
                     else if (key == "area" && value == "yes")
                         isArea = true;
                 }
             }
+
+            if (string.IsNullOrEmpty(highway))
+                highway = railway;
 
             return !isArea && !string.IsNullOrEmpty(highway) && IsSupportedHighway(highway);
         }
@@ -1076,6 +1088,16 @@ namespace cs2_osm_importer
                 case "primary_link":
                 case "secondary_link":
                 case "tertiary_link":
+                case "footway":
+                case "bridleway":
+                case "monorail":
+                case "rail":
+                case "light_rail":
+                case "subway":
+                case "tram":
+                case "track":
+                case "cycleway":
+                case "pedestrian":
                     return true;
                 default:
                     return false;

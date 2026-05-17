@@ -1410,7 +1410,7 @@ namespace cs2_osm_importer
             using var prefabs = query.ToEntityArray(Allocator.Temp);
             return prefabs
                 .Select(e => _prefabSystem.GetPrefab<NetPrefab>(e))
-                .Where(p => p != null && IsSuitableRoadPrefabName(p.name))
+                .Where(p => p != null)
                 .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -1441,6 +1441,23 @@ namespace cs2_osm_importer
                     return new[] { "Street", "Road" };
                 case "service":
                     return new[] { "Service", "Street", "Road" };
+                case "footway":
+                case "pedestrian":
+                    return new[] { "Pedestrian", "Street" };
+                case "bridleway":
+                    return new[] { "Pedestrian", "Path", "Street" };
+                case "cycleway":
+                    return new[] { "Cycleway", "Path", "Road", "Street" };
+                case "track":
+                    return new[] { "GravelRoad", "SmallRoad", "Road", "Street" };
+                case "monorail":
+                case "rail":
+                case "subway":
+                    return new[] { "Train Track", "TrainTrack", "Train", "Double Train Track", "DoubleTrainTrack", "Oneway Train Track", "OnewayTrainTrack", "TwoWay Train Track", "TwoWayTrainTrack" };
+                case "light_rail":
+                    return new[] { "Double Tram Track", "DoubleTramTrack", "Tram Track", "TramTrack", "Train Track", "TrainTrack", "Double Train Track", "DoubleTrainTrack" };
+                case "tram":
+                    return new[] { "Tram Track", "TramTrack", "Oneway Tram Track", "OnewayTramTrack", "Double Tram Track", "DoubleTramTrack" };
                 default:
                     return new[] { "Street", "Road" };
             }
@@ -1460,15 +1477,25 @@ namespace cs2_osm_importer
                 lower.Contains("bridge support") ||
                 lower.Contains("support") ||
                 lower.Contains("tunnel") ||
-                lower.Contains("interchange") ||
-                lower.Contains("gravel") ||
-                lower.Contains("dirt") ||
-                lower.Contains("unpaved") ||
-                lower.Contains("track") ||
-                lower.Contains("path"))
+                lower.Contains("interchange"))
             {
                 return false;
             }
+
+            // Gravel/dirt/unpaved prefabs are suitable for farm/forest tracks
+            if (!(highwayType is "track") &&
+                (lower.Contains("gravel") || lower.Contains("dirt") || lower.Contains("unpaved")))
+            {
+                return false;
+            }
+
+            // Railway prefabs naturally contain "track" in their names (e.g. TrainTrack)
+            if (!(highwayType is "rail" or "monorail" or "light_rail" or "subway" or "tram") && lower.Contains("track"))
+                return false;
+
+            // Path prefabs are suitable for pedestrian/cycle types
+            if (!(highwayType is "footway" or "bridleway" or "cycleway" or "pedestrian") && lower.Contains("path"))
+                return false;
 
             if (highwayType.Equals("service", StringComparison.OrdinalIgnoreCase) &&
                 (lower.Contains("highway") || lower.Contains("freeway")))
@@ -1508,6 +1535,18 @@ namespace cs2_osm_importer
                     return 2;
                 case "service":
                     return 1;
+                case "footway":
+                case "bridleway":
+                case "track":
+                case "cycleway":
+                case "pedestrian":
+                    return 1;
+                case "monorail":
+                case "rail":
+                case "light_rail":
+                case "subway":
+                case "tram":
+                    return 2;
                 default:
                     return 0;
             }
