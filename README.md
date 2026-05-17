@@ -64,6 +64,8 @@ If you omit the argument, it defaults to `patch`.
 - [Cities Skylines II Modding Toolchain](https://cs2.paradoxwikis.com/Modding_Toolchain) - helpful for getting modding development environment
 - [CS2 Modding documentation](https://cs2.paradoxwikis.com/Modding)
 - This project was based off of the [Cities Skylines OSM Import mod](https://steamcommunity.com/sharedfiles/filedetails/?id=1957515502).
+- Related tools/mods:
+  - [cs2-minneapolis-osm-toolkit](https://github.com/Osyanne/cs2-minneapolis-osm-toolkit): Real-world GIS data from OpenStreetMap
 
 
 
