@@ -278,7 +278,7 @@ namespace cs2_osm_importer
                 isCovered,
                 isEmbankment,
                 isCutting);
-            way.UsesStructuralElevation = (hasLayer || isBridge || isTunnel || isCovered || isEmbankment || isCutting) &&
+            way.UsesStructuralElevation = ((hasLayer && layer != 0) || isBridge || isTunnel || isCovered || isEmbankment || isCutting) &&
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
 
             if (way.Highway is "monorail" or "light_rail" or "subway" || wayRailway is "monorail" or "light_rail" or "subway")

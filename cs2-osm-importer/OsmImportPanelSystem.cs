@@ -437,7 +437,7 @@ namespace cs2_osm_importer
 
             _deleteButton = new Button
             {
-                displayName = OsmLocalization.T("OsmImporter.Button.DeleteAllRoads", "Delete All Roads"),
+                    displayName = OsmLocalization.T("OsmImporter.Button.DeleteAllRoads", "Delete All Roads && Rails"),
                 action = DeleteAllRoads,
             };
 

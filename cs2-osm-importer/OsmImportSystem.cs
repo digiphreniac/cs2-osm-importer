@@ -285,7 +285,7 @@ namespace cs2_osm_importer
                 _lastPendingDefinitions = -1;
                 _lastWaitLogFrame = 0;
                 _baselineEdgeCount = CountAllRoadEdges();
-                using (var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp))
+                using (var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp))
                 {
                     _baselineRoadEdges = edgeArray.ToHashSet();
                 }
@@ -731,16 +731,16 @@ namespace cs2_osm_importer
         {
             try
             {
-                var deletedEdges = MarkRoadEdgesDeleted();
-                var deletedNodes = MarkRoadNodesDeleted();
+                var deletedEdges = MarkNetEdgesDeleted();
+                var deletedNodes = MarkNetNodesDeleted();
                 HasGeneratedAssets = false;
-                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} road edges and {1} road nodes for deletion.", deletedEdges, deletedNodes));
+                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges and {1} nodes for deletion.", deletedEdges, deletedNodes));
                 Mod.log.Info(Status);
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete roads: {0}", ex.Message));
+                Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete roads and rails: {0}", ex.Message));
             }
         }
 
@@ -836,7 +836,7 @@ namespace cs2_osm_importer
             if (_roadNamesApplied || _nameSystem == null || _queuedSegmentInfos.Count == 0)
                 return;
 
-            using var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
+            using var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
             if (edgeArray.Length == 0)
                 return;
 
@@ -1230,7 +1230,7 @@ namespace cs2_osm_importer
             if (!_roadNamesApplied || _nameSystem == null)
                 return L("OsmImporter.Status.ValidationNotApplied", "Validation: names not yet applied.");
 
-            var edgeArray = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
+            var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
             var newEdges = new List<Entity>();
             foreach (var entity in edgeArray)
             {
@@ -1643,12 +1643,12 @@ namespace cs2_osm_importer
 
         private int CountAllRoadEdges()
         {
-            using var entities = GetCurrentRoadEdges().ToEntityArray(Allocator.Temp);
+            using var entities = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
 
             return entities.Length;
         }
 
-        private EntityQuery GetCurrentRoadEdges()
+        private EntityQuery GetCurrentNetEdges()
         {
             return GetEntityQuery(
                 ComponentType.ReadOnly<Edge>(),
@@ -1657,36 +1657,66 @@ namespace cs2_osm_importer
                 ComponentType.Exclude<Deleted>());
         }
 
-        private int MarkRoadEdgesDeleted()
+        private int MarkNetEdgesDeleted()
         {
-            using var entities = GetEntityQuery(
-                ComponentType.ReadOnly<Edge>(),
-                ComponentType.ReadOnly<Road>(),
-                ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
-
-            foreach (var entity in entities)
+            var deleted = new HashSet<Entity>();
+            var edgeTypes = new[]
             {
-                EntityManager.AddComponentData(entity, new Deleted());
-                EntityManager.AddComponentData(entity, new Updated());
+                ComponentType.ReadOnly<Road>(),
+                ComponentType.ReadOnly<TrainTrack>(),
+                ComponentType.ReadOnly<SubwayTrack>(),
+                ComponentType.ReadOnly<TramTrack>(),
+            };
+
+            foreach (var type in edgeTypes)
+            {
+                using var entities = GetEntityQuery(
+                    ComponentType.ReadOnly<Edge>(),
+                    type,
+                    ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
+
+                foreach (var entity in entities)
+                {
+                    if (deleted.Add(entity))
+                    {
+                        EntityManager.AddComponentData(entity, new Deleted());
+                        EntityManager.AddComponentData(entity, new Updated());
+                    }
+                }
             }
 
-            return entities.Length;
+            return deleted.Count;
         }
 
-        private int MarkRoadNodesDeleted()
+        private int MarkNetNodesDeleted()
         {
-            using var entities = GetEntityQuery(
-                ComponentType.ReadOnly<Node>(),
-                ComponentType.ReadOnly<Road>(),
-                ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
-
-            foreach (var entity in entities)
+            var deleted = new HashSet<Entity>();
+            var nodeTypes = new[]
             {
-                EntityManager.AddComponentData(entity, new Deleted());
-                EntityManager.AddComponentData(entity, new Updated());
+                ComponentType.ReadOnly<Road>(),
+                ComponentType.ReadOnly<TrainTrack>(),
+                ComponentType.ReadOnly<SubwayTrack>(),
+                ComponentType.ReadOnly<TramTrack>(),
+            };
+
+            foreach (var type in nodeTypes)
+            {
+                using var entities = GetEntityQuery(
+                    ComponentType.ReadOnly<Node>(),
+                    type,
+                    ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
+
+                foreach (var entity in entities)
+                {
+                    if (deleted.Add(entity))
+                    {
+                        EntityManager.AddComponentData(entity, new Deleted());
+                        EntityManager.AddComponentData(entity, new Updated());
+                    }
+                }
             }
 
-            return entities.Length;
+            return deleted.Count;
         }
 
         private bool TryGetRoadPrefab(string name, out NetPrefab prefab, out Entity entity)
