@@ -68,7 +68,7 @@ namespace cs2_osm_importer
                 { "light_rail", new RoadTypeMetadata("OsmImporter.RoadType.LightRail.Name", "Light rail", "OsmImporter.RoadType.LightRail.Description", "Urban rail system that combines tram-like flexibility with higher capacity.", "Media/Game/Icons/DoubleTramTrack.svg") },
                 { "subway", new RoadTypeMetadata("OsmImporter.RoadType.Subway.Name", "Subway", "OsmImporter.RoadType.Subway.Description", "Underground metro system for high-capacity urban transit.", "Media/Game/Icons/DoubleTrainTrack.svg") },
                 { "tram", new RoadTypeMetadata("OsmImporter.RoadType.Tram.Name", "Tram", "OsmImporter.RoadType.Tram.Description", "Street-running light rail system for city transport.", "Media/Game/Icons/DoubleTramTrack.svg") },
-                { "track", new RoadTypeMetadata("OsmImporter.RoadType.Track.Name", "Track", "OsmImporter.RoadType.Track.Description", "Unpaved or rough rural road used for agriculture and forestry.", "Media/Game/Icons/GravelRoad.svg") },
+                { "track", new RoadTypeMetadata("OsmImporter.RoadType.Track.Name", "Track", "OsmImporter.RoadType.Track.Description", "Unpaved or rough rural road used for agriculture and forestry.", "Media/Game/Icons/eGravelRoad.svg") },
                 { "cycleway", new RoadTypeMetadata("OsmImporter.RoadType.Cycleway.Name", "Cycleway", "OsmImporter.RoadType.Cycleway.Description", "Dedicated path or lane for bicycle traffic.", "Media/Game/Icons/TwoWayBikePath.svg") },
                 { "pedestrian", new RoadTypeMetadata("OsmImporter.RoadType.Pedestrian.Name", "Pedestrian", "OsmImporter.RoadType.Pedestrian.Description", "Street or zone reserved for pedestrian use.", "Media/Game/Icons/PedestrianStreet.svg") },
             };
@@ -101,15 +101,8 @@ namespace cs2_osm_importer
         private readonly Dictionary<string, bool> _generateRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly List<RoadTypeToggleButton> _roadTypeTiles = new List<RoadTypeToggleButton>();
         private readonly List<string> _roadTypesOrder = new List<string>(SupportedRoadTypes);
-        private static readonly HashSet<string> DefaultSelectedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "motorway",
-            "motorway_link",
-            "trunk",
-            "trunk_link",
-            "primary",
-            "primary_link",
-        };
+        private static readonly HashSet<string> DefaultSelectedRoadTypes =
+            new HashSet<string>(SupportedRoadTypes, StringComparer.OrdinalIgnoreCase);
         private string _lastRoadTypeCountsJson = string.Empty;
         private bool _lastHasLoadedData;
         private bool _lastHasGeneratedAssets;

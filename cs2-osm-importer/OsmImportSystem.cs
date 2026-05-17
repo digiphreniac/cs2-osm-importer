@@ -1332,10 +1332,10 @@ namespace cs2_osm_importer
 
             foreach (var preferredName in preferredNames)
             {
-                var match = candidates.FirstOrDefault(p =>
-                    IsSuitableRoadPrefabName(p.name, highwayType) &&
-                    p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    (lanes <= 0 || ParsePrefabLaneCount(p.name) == lanes));
+                    var match = candidates.FirstOrDefault(p =>
+                        IsSuitableRoadPrefabName(p.name, highwayType) &&
+                        p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        (lanes <= 0 || ParsePrefabLaneCount(p.name) == lanes || ParsePrefabLaneCount(p.name) == 0));
                 if (match != null && _prefabSystem.TryGetEntity(match, out var entity))
                 {
                     if (lanes <= 0)
@@ -1449,7 +1449,7 @@ namespace cs2_osm_importer
                 case "cycleway":
                     return new[] { "Cycleway", "Path", "Road", "Street" };
                 case "track":
-                    return new[] { "GravelRoad", "SmallRoad", "Road", "Street" };
+                    return new[] { "Gravel Road", "GravelRoad", "Gravel Oneway Road", "GravelOnewayRoad", "SmallRoad", "Small Road", "Road", "Street" };
                 case "monorail":
                 case "rail":
                 case "subway":
