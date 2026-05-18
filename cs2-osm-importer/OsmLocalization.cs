@@ -48,7 +48,6 @@ namespace cs2_osm_importer
             { "OsmImporter.Label.ConfirmImport", "Confirm OSM import" },
             { "OsmImporter.Label.RoadTypes", "Road types" },
             { "OsmImporter.Label.GenerateRoads", "Generate Roads" },
-            { "OsmImporter.Label.WaysToGenerate", "Ways to generate: {0}" },
             { "OsmImporter.Label.SupportedTypes", "Supported types: {0}" },
             { "OsmImporter.Label.LoadWarning", "Loading OSM data may temporarily freeze the game while the file is parsed and road definitions are generated." },
             { "OsmImporter.Label.ImportInstructions", "Pick an OSM input file and configure how the data is parsed before loading it into the game." },

@@ -90,13 +90,15 @@ namespace cs2_osm_importer
         private IWidget _generateRoadTypeSelectionWidget;
         private RoadTypeFilterAdapter _generateRoadTypeFilterAdapter;
         private Label _generateRoadTypesInstructionLabel;
-        private Label _waysToCreateLabel;
         private FloatSliderField _simplifyToleranceField;
         private FloatSliderField _curveToleranceField;
         private FloatSliderField _scaleFactorField;
         private IntSliderField _maxWaysField;
         private EditorSection _advancedSettingsSection;
         private EditorSection _structuralElevationSection;
+        private EditorSection _generateAdvancedSettingsSection;
+        private FloatSliderField _generateIntersectionThresholdField;
+        private Button _generateResetDefaultsButton;
         private readonly Dictionary<string, bool> _importRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, bool> _generateRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly List<RoadTypeToggleButton> _roadTypeTiles = new List<RoadTypeToggleButton>();
@@ -169,7 +171,6 @@ namespace cs2_osm_importer
                 FlushStatusRebuild();
                 UpdateControlStates();
                 UpdateGeneratedState();
-                UpdateWaysToGenerateLabel();
             }
 
         }
@@ -442,52 +443,43 @@ namespace cs2_osm_importer
                 action = DeleteAllSegments,
             };
 
-            var supportedTypesLabel = new Label
+            _generateIntersectionThresholdField = new FloatSliderField
             {
-                displayName = OsmLocalization.F("OsmImporter.Label.SupportedTypes", "Supported types: {0}", string.Join(", ", SupportedRoadTypes.Select(GetRoadTypeDisplayName))),
-                level = Label.Level.SubTitle,
+                displayName = OsmLocalization.T("IntersectionThreshold", "Intersection threshold (m)"),
+                tooltip = OsmLocalization.T("IntersectionThreshold.Description", "Maximum XZ distance from a road for a pillar to be considered intersecting (1-20m)."),
+                min = 1d,
+                max = 20d,
+                step = 0.5,
+                fractionDigits = 1,
+                stepMultiplier = 10d,
+                unit = "m",
+                accessor = new TypedValueAccessor<double>(() => _intersectionThresholdValue, SetIntersectionThresholdValue),
+                valueVersion = () => _fieldVersion,
             };
 
-            _waysToCreateLabel = new Label
+            _generateResetDefaultsButton = new Button
             {
-                displayName = GetWaysToGenerateText(),
-                level = Label.Level.SubTitle,
+                displayName = OsmLocalization.T("OsmImporter.Button.ResetDefaults", "Reset to defaults"),
+                action = ResetGenerateDefaults,
             };
 
-            var generateAdvancedSettings = new EditorSection
+            _generateAdvancedSettingsSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.AdvancedSettings", "Advanced settings"),
                 expanded = _generateAdvancedSettingsExpanded,
+                disabled = () => _importSystem.IsImporting || !_importSystem.HasLoadedData,
                 children = new List<IWidget>
                 {
-                    new FloatSliderField
-                    {
-                        displayName = OsmLocalization.T("IntersectionThreshold", "Intersection threshold (m)"),
-                        tooltip = OsmLocalization.T("IntersectionThreshold.Description", "Maximum XZ distance from a road for a pillar to be considered intersecting (1-20m)."),
-                        min = 1d,
-                        max = 20d,
-                        step = 0.5,
-                        fractionDigits = 1,
-                        stepMultiplier = 10d,
-                        unit = "m",
-                        accessor = new TypedValueAccessor<double>(() => _intersectionThresholdValue, SetIntersectionThresholdValue),
-                        valueVersion = () => _fieldVersion,
-                    },
-                    new Button
-                    {
-                        displayName = OsmLocalization.T("OsmImporter.Button.ResetDefaults", "Reset to defaults"),
-                        action = ResetGenerateDefaults,
-                    },
+                    _generateIntersectionThresholdField,
+                    _generateResetDefaultsButton,
                 },
             };
 
             var generateChildren = new List<IWidget>
             {
                 _generateRoadTypesInstructionLabel,
-                supportedTypesLabel,
                 _generateRoadTypeSelectionWidget,
-                _waysToCreateLabel,
-                generateAdvancedSettings,
+                _generateAdvancedSettingsSection,
                 _generateButton,
                 _deleteButton,
             };
@@ -509,7 +501,7 @@ namespace cs2_osm_importer
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
                 expanded = true,
-                disabled = () => !_importSystem.HasLoadedData,
+                disabled = () => _importSystem.IsImporting || !_importSystem.HasLoadedData,
                 children = generateChildren,
             };
 
@@ -759,6 +751,15 @@ namespace cs2_osm_importer
             var isBusy = _importSystem.IsImporting;
             var hasLoadedData = _importSystem.HasLoadedData;
             var hasGeneratedAssets = _importSystem.HasGeneratedAssets;
+            var isGenerateSectionDisabled = isBusy || !hasLoadedData;
+
+            SetWidgetObjectMember(_generateRoadTypeSelectionWidget, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
+
+            if (_generateAdvancedSettingsSection != null)
+                _generateAdvancedSettingsSection.disabled = () => isGenerateSectionDisabled;
+
+            SetWidgetObjectMember(_generateIntersectionThresholdField, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
+            SetWidgetObjectMember(_generateResetDefaultsButton, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
 
             if (_loadButton != null)
                 _loadButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid || _importRoadTypeSelections.Values.All(v => !v);
@@ -767,10 +768,10 @@ namespace cs2_osm_importer
                 _resetDefaultsButton.disabled = () => isBusy;
 
             if (_generateButton != null)
-                _generateButton.disabled = () => isBusy || !hasLoadedData || _generateRoadTypeSelections.Values.All(v => !v);
+                _generateButton.disabled = () => isGenerateSectionDisabled || _generateRoadTypeSelections.Values.All(v => !v);
 
             if (_deleteButton != null)
-                _deleteButton.disabled = () => !hasGeneratedAssets;
+                _deleteButton.disabled = () => isGenerateSectionDisabled || !hasGeneratedAssets;
         }
 
         private void UpdateGeneratedState()
@@ -800,26 +801,6 @@ namespace cs2_osm_importer
             }
 
             _lastHasGeneratedAssets = hasGeneratedAssets;
-        }
-
-        private void UpdateWaysToGenerateLabel()
-        {
-            if (_waysToCreateLabel == null)
-                return;
-
-            _waysToCreateLabel.displayName = GetWaysToGenerateText();
-        }
-
-        private string GetWaysToGenerateText()
-        {
-            if (_importSystem?.RoadTypeCountsByType == null || _importSystem.RoadTypeCountsByType.Count == 0)
-                return string.Empty;
-
-            var total = GetSelectedGenerateRoadTypes()
-                .Select(roadType => _importSystem.RoadTypeCountsByType.TryGetValue(roadType ?? string.Empty, out var count) ? count : 0)
-                .Sum();
-
-            return OsmLocalization.F("OsmImporter.Label.WaysToGenerate", "Ways to generate: {0}", total);
         }
 
         private void SetPathValue(string value)
@@ -1267,8 +1248,9 @@ namespace cs2_osm_importer
         {
             var statusIcon = new ImageField();
             SetWidgetStringMember(statusIcon, "m_URI", GetStatusIconPath(statusText));
+            SetWidgetObjectMember(statusIcon, "m_Label", default(Game.UI.Localization.LocalizedString));
             SetWidgetBoolMember(statusIcon, "padding", false);
-            SetWidgetFlex(statusIcon, 0.018f, 0f, 0f);
+            SetWidgetFlex(statusIcon, null, 0f, 0f);
 
             var statusLabel = new Label
             {
