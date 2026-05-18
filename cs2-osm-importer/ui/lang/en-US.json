@@ -85,6 +85,7 @@
   "OsmImporter.Status.AllRoadTypesSelected": "All supported road types selected.",
   "OsmImporter.Status.CS2Verifying": "CS2 consumed {0} OSM definitions. Verifying generated roads...",
   "OsmImporter.Status.DeleteComplete": "Marked {0} edges for deletion.",
+  "OsmImporter.Status.DeleteProgress": "Deleting roads... {0}/{1}",
   "OsmImporter.Status.DeleteFailed": "Failed to delete segments: {0}",
   "OsmImporter.Status.DeletingSegments": "Deleting all segments...",
   "OsmImporter.Status.DefaultsRestored": "Defaults restored.",

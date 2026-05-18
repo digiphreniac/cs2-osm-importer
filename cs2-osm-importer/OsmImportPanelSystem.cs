@@ -1284,6 +1284,9 @@ namespace cs2_osm_importer
             if (text.Contains("failed") || text.Contains("invalid") || text.Contains("error"))
                 return "Media/Game/Icons/AdvisorNotice.svg";
 
+            if (_importSystem.IsDeletingSegments)
+                return "Media/Game/Icons/Garbage.svg";
+
             if (_importSystem.IsImporting && (text.Contains("loading") || text.Contains("parsing") || text.Contains("preparing")))
                 return "Media/Game/Icons/Roads.svg";
 

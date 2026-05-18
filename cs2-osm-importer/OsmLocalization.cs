@@ -102,6 +102,7 @@ namespace cs2_osm_importer
             { "OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified." },
             { "OsmImporter.Status.WaitingContinue", "Queued {0} road definitions; CS2 consumed {1} so far. Leave the editor running or try fewer road types." },
             { "OsmImporter.Status.DeleteComplete", "Marked {0} edges for deletion." },
+            { "OsmImporter.Status.DeleteProgress", "Deleting roads... {0}/{1}" },
             { "OsmImporter.Status.ValidationNotApplied", "Validation: names not yet applied." },
             { "OsmImporter.Status.ValidationSummary", "Validation: {0} new edges ({1} baseline), {2} named, {3} unnamed. Queued: {4} total, {5} non-empty. Samples: {6}" },
             { "OsmImporter.Bounds.ProjectedImport", "Projected import bounds: {0}" },

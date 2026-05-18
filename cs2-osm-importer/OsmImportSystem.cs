@@ -65,6 +65,10 @@ namespace cs2_osm_importer
         private HashSet<Entity> _generatedEdgeEntities = new HashSet<Entity>();
         private int _pillarWaitFrames;
         private HashSet<Entity> _baselinePillarEntities = new HashSet<Entity>();
+        private List<Entity> _pendingDeleteEntities = new List<Entity>();
+        private int _pendingDeleteIndex;
+        private int _deletedEdgeCount;
+        private bool _deleteCompletionPending;
         private int _lastPendingDefinitions = -1;
         private int _lastWaitLogFrame;
         private bool _loggedFirstQueuedSegment;
@@ -91,6 +95,7 @@ namespace cs2_osm_importer
         private WorkPhase _phase = WorkPhase.Idle;
 
         internal bool IsImporting { get; private set; }
+        internal bool IsDeletingSegments => IsImporting && _phase == WorkPhase.DeleteRoads;
         private string _status = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         internal string Status => _status;
         internal string StatusSummary { get; private set; } = string.Empty;
@@ -212,7 +217,13 @@ namespace cs2_osm_importer
 
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
+            _pendingDeleteEntities = _generatedEdgeEntities.Where(entity => entity != Entity.Null).ToList();
+            _pendingDeleteIndex = 0;
+            _deletedEdgeCount = 0;
+            _deleteCompletionPending = false;
+            _generatedEdgeEntities.Clear();
             SetStatus(L("OsmImporter.Status.DeletingSegments", "Deleting all segments..."));
+            StatusSummary = string.Empty;
             return true;
         }
 
@@ -799,37 +810,46 @@ namespace cs2_osm_importer
         {
             try
             {
-                var deletedEdges = DeleteAllGeneratedSegments();
-                HasGeneratedAssets = false;
-                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges for deletion.", deletedEdges));
-                Mod.log.Info(Status);
+                if (_deleteCompletionPending)
+                {
+                    _deleteCompletionPending = false;
+                    _pendingDeleteEntities.Clear();
+                    HasGeneratedAssets = false;
+                    Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges for deletion.", _deletedEdgeCount));
+                    Mod.log.Info(Status);
+                    return;
+                }
+
+                var processedThisFrame = 0;
+                while (_pendingDeleteIndex < _pendingDeleteEntities.Count && processedThisFrame < MaxSegmentsPerFrame)
+                {
+                    var entity = _pendingDeleteEntities[_pendingDeleteIndex++];
+                    if (EntityManager.Exists(entity) && !EntityManager.HasComponent<Deleted>(entity))
+                    {
+                        EntityManager.AddComponentData(entity, new Deleted());
+                        EntityManager.AddComponentData(entity, new Updated());
+                        _deletedEdgeCount++;
+                    }
+
+                    processedThisFrame++;
+                }
+
+                if (_pendingDeleteIndex < _pendingDeleteEntities.Count)
+                {
+                    SetStatus(L("OsmImporter.Status.DeletingSegments", "Deleting all segments..."));
+                    StatusSummary = LF("OsmImporter.Status.DeleteProgress", "Deleting roads... {0}/{1}", _pendingDeleteIndex, _pendingDeleteEntities.Count);
+                    return;
+                }
+
+                SetStatus(L("OsmImporter.Status.DeletingSegments", "Deleting all segments..."));
+                StatusSummary = LF("OsmImporter.Status.DeleteProgress", "Deleting roads... {0}/{1}", _pendingDeleteIndex, _pendingDeleteEntities.Count);
+                _deleteCompletionPending = true;
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
                 Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete segments: {0}", ex.Message));
             }
-        }
-
-        private int DeleteAllGeneratedSegments()
-        {
-            var deleted = 0;
-
-            foreach (var entity in _generatedEdgeEntities)
-            {
-                if (!EntityManager.Exists(entity))
-                    continue;
-
-                if (EntityManager.HasComponent<Deleted>(entity))
-                    continue;
-
-                EntityManager.AddComponentData(entity, new Deleted());
-                EntityManager.AddComponentData(entity, new Updated());
-                deleted++;
-            }
-            _generatedEdgeEntities.Clear();
-
-            return deleted;
         }
 
         private void Complete(string message)
