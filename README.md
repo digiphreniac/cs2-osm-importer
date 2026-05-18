@@ -6,37 +6,41 @@ A **Cities: Skylines 2** mod that imports real-world road network data from **[O
 * Unified Icon Library
 
 ## Usage
-### 1. Dowload OSM Data
+### 1. Download OSM Data
 OSM data can be downloaded from a variety of sources. \
-I recommend you download OSM from [terraining.ateliernonta.com](https://terraining.ateliernonta.com) (more detailed instructions at the [GitHub repo](https://github.com/nonta1234/terraining-heightmap-generator#readme)).
+I recommend [terraining.ateliernonta.com](https://terraining.ateliernonta.com) (see the [GitHub repo](https://github.com/nonta1234/terraining-heightmap-generator#readme) for details).
 
 > [!NOTE]
-> It is recommended that you also download heightmap data at the website [terraining.ateliernonta.com](https://terraining.ateliernonta.com). \
-> <small>
+> It is recommended that you also download heightmap data at the website [terraining.ateliernonta.com](https://terraining.ateliernonta.com).
+> 
 > [Learn more about heightmaps in Cities Skylines II](https://cs2.paradoxwikis.com/Map_Creation#Heightmaps)
-> </small>
-
 
 ### 2. Launch editor
-This mod was built to work with the in-game editor mode. 
+Open the in-game editor.
+
+![Image of open-editor button](cs2-osm-importer/Properties/open_editor_button.png)
 
 ### 3. Open OSM Importer Tool
-<!-- TODO - finish this -->
-You can open the OSM Importer tool panel by clicking on the button ... ***TODO ! ! ! FINISH ! ! ! TODO***
+Select **OSM Importer Tool** in the editor to open the mod tool panel.
+
+![Image of Mod Toggle button](cs2-osm-importer/Properties/mod_toggle_button.png)
 
 ### 4. Import the OSM Data
-Using the OSM Importer tool panel, input the path to the OSM data file from step 1 and import the data. \
+Use **OSM file path** to pick your `.osm` file. Adjust options if needed, then click **Load OSM Data** and **Continue**.
+
 
 > [!NOTE]
-> The import process will take some time and likely freeze your game for 10+ seconds.
+> Loading may freeze the game for a few seconds while the file is parse.
 
 ### 5. Generate roads
-Wait patiently while roads generate and enjoy!
-Once you've imported the data, you can select different subsets of the roads to generate.
+Choose which loaded road types to generate, then click **Generate Roads**.
 
 > [!NOTE]
-> Be aware the road generation can take some time. \
-> Areas with lots of roads will require a lot of compute power.
+> Generation can take some time, especially for dense road networks.
+
+| ![Image of Import Data tool menu section](cs2-osm-importer/Properties/mod_tool_menu_p1.png) | ![Image of Generate Roads tool menu section](cs2-osm-importer/Properties/mod_tool_menu_p2.png) |
+|:-------------------------------------------------------------------------------------------:|:----------------------------------------------------------------------------------------------:|
+|                                       1: Import Data                                        |                                       2: Generate Roads                                        |
 
 ## How it works (for developers)
 
