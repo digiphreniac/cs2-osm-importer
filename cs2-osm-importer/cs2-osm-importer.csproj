@@ -93,6 +93,10 @@
             SourceFiles="$(ProjectDir)ui\src\assets\Openstreetmap_logo.png"
             DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\Openstreetmap_logo.png"
             SkipUnchangedFiles="true" />
+        <Copy
+            SourceFiles="$(ProjectDir)ui\src\assets\StatusInfo.svg"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\StatusInfo.svg"
+            SkipUnchangedFiles="true" />
     </Target>
 
     <Target Name="CopyUiLocalization" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">

@@ -520,6 +520,7 @@ namespace cs2_osm_importer
                 direction = Direction.Vertical,
                 children = content,
             };
+            SetWidgetBoolMember(scrollable, "padding", false);
 
             var rootChildren = new List<IWidget> { scrollable };
 
@@ -528,7 +529,7 @@ namespace cs2_osm_importer
             if (!string.IsNullOrEmpty(bottomText))
             {
                 rootChildren.Add(new Divider());
-                rootChildren.Add(new Label { displayName = bottomText });
+                rootChildren.Add(BuildStatusFooter(bottomText));
             }
 
             return rootChildren;
@@ -833,9 +834,9 @@ namespace cs2_osm_importer
             }
             else if (_importSystem != null)
             {
-            UpdateStatus(_importSystem.Status);
-            FlushStatusRebuild();
-        }
+                UpdateStatus(_importSystem.Status);
+                FlushStatusRebuild();
+            }
             else
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.Ready", "Ready."));
@@ -1260,6 +1261,120 @@ namespace cs2_osm_importer
                 leftButton,
                 rightButton,
             });
+        }
+
+        private IWidget BuildStatusFooter(string statusText)
+        {
+            var statusIcon = new ImageField();
+            SetWidgetStringMember(statusIcon, "m_URI", GetStatusIconPath(statusText));
+            SetWidgetBoolMember(statusIcon, "padding", false);
+            SetWidgetFlex(statusIcon, 0.018f, 0f, 0f);
+
+            var statusLabel = new Label
+            {
+                displayName = statusText,
+            };
+            SetWidgetBoolMember(statusLabel, "padding", false);
+            TrySetWidgetFloatMember(statusLabel, "height", 0.018f);
+            TrySetWidgetFloatMember(statusLabel, "minHeight", 0.018f);
+            SetWidgetFlex(statusLabel, 0f, 1f, 0f);
+
+            var row = CreateRow(new List<IWidget>
+            {
+                statusIcon,
+                statusLabel,
+            });
+
+            SetWidgetBoolMember(row, "padding", false);
+            TrySetWidgetFloatMember(row, "height", 0.024f);
+            TrySetWidgetFloatMember(row, "minHeight", 0.024f);
+
+            return row;
+        }
+
+        private string GetStatusIconPath(string statusText)
+        {
+            if (_importSystem == null)
+                return "coui://ui-mods/images/StatusInfo.svg";
+
+            var text = (statusText ?? string.Empty).ToLowerInvariant();
+
+            if (text.Contains("failed") || text.Contains("invalid") || text.Contains("error"))
+                return "Media/Game/Icons/AdvisorNotice.svg";
+
+            if (_importSystem.IsImporting && (text.Contains("loading") || text.Contains("parsing") || text.Contains("preparing")))
+                return "Media/Game/Icons/Roads.svg";
+
+            if (_importSystem.IsImporting && (text.Contains("generating") || text.Contains("done") || text.Contains("waiting") || text.Contains(" | ")))
+                return "Media/Game/Icons/RoadsServices.svg";
+
+            if (_importSystem.HasGeneratedAssets || text.Contains("road generation complete"))
+                return "Media/Game/Icons/Trophy.svg";
+
+            if (_importSystem.HasLoadedData)
+                return "coui://ui-mods/images/StatusInfo.svg";
+
+            return "coui://ui-mods/images/StatusInfo.svg";
+        }
+
+        private static void SetWidgetStringMember(object widget, string memberName, string value)
+        {
+            if (widget == null)
+                return;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var type = widget.GetType();
+
+            var property = type.GetProperty(memberName, flags);
+            if (property != null && property.CanWrite && property.PropertyType == typeof(string))
+            {
+                property.SetValue(widget, value);
+                return;
+            }
+
+            var field = type.GetField(memberName, flags);
+            if (field != null && field.FieldType == typeof(string))
+                field.SetValue(widget, value);
+        }
+
+        private static void SetWidgetBoolMember(object widget, string memberName, bool value)
+        {
+            if (widget == null)
+                return;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var type = widget.GetType();
+
+            var property = type.GetProperty(memberName, flags);
+            if (property != null && property.CanWrite && property.PropertyType == typeof(bool))
+            {
+                property.SetValue(widget, value);
+                return;
+            }
+
+            var field = type.GetField(memberName, flags);
+            if (field != null && field.FieldType == typeof(bool))
+                field.SetValue(widget, value);
+        }
+
+        private static void SetWidgetObjectMember(object widget, string memberName, object value)
+        {
+            if (widget == null)
+                return;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var type = widget.GetType();
+
+            var property = type.GetProperty(memberName, flags);
+            if (property != null && property.CanWrite)
+            {
+                property.SetValue(widget, value);
+                return;
+            }
+
+            var field = type.GetField(memberName, flags);
+            if (field != null)
+                field.SetValue(widget, value);
         }
 
         private static void SetWidgetFlex(object widget, float? basis, float? grow, float? shrink)
