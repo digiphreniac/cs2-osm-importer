@@ -6,7 +6,7 @@
   "OsmImporter.Bounds.Short": "{0:F0}m x {1:F0}m, y={2:F1}m",
   "OsmImporter.Button.Cancel": "Cancel",
   "OsmImporter.Button.Continue": "Continue",
-  "OsmImporter.Button.DeleteAllRoads": "Delete All Roads",
+  "OsmImporter.Button.DeleteAllSegments": "Delete all segments",
   "OsmImporter.Button.GenerateRoads": "Generate Roads",
   "OsmImporter.Button.LoadOSMData": "Load OSM Data",
   "OsmImporter.Button.ResetDefaults": "Reset to defaults",

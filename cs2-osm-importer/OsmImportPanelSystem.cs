@@ -437,8 +437,8 @@ namespace cs2_osm_importer
 
             _deleteButton = new Button
             {
-                    displayName = OsmLocalization.T("OsmImporter.Button.DeleteAllRoads", "Delete All Roads && Rails"),
-                action = DeleteAllRoads,
+                    displayName = OsmLocalization.T("OsmImporter.Button.DeleteAllSegments", "Delete All Segments"),
+                action = DeleteAllSegments,
             };
 
             var supportedTypesLabel = new Label
@@ -587,9 +587,9 @@ namespace cs2_osm_importer
             UpdateStatus(_importSystem.Status);
         }
 
-        private void DeleteAllRoads()
+        private void DeleteAllSegments()
         {
-            if (!_importSystem.DeleteAllRoads())
+            if (!_importSystem.DeleteAllSegments())
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.OperationInProgress", "An OSM operation is already running."));
                 return;

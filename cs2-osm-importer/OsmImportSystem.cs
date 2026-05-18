@@ -60,7 +60,8 @@ namespace cs2_osm_importer
         private int _sessionId;
         private int _applyWaitFrames;
         private int _baselineEdgeCount;
-        private HashSet<Entity> _baselineRoadEdges = new HashSet<Entity>();
+        private HashSet<Entity> _baselineSegments = new HashSet<Entity>();
+        private HashSet<Entity> _generatedEdgeEntities = new HashSet<Entity>();
         private int _pillarWaitFrames;
         private HashSet<Entity> _baselinePillarEntities = new HashSet<Entity>();
         private int _lastPendingDefinitions = -1;
@@ -179,7 +180,7 @@ namespace cs2_osm_importer
             return true;
         }
 
-        internal bool DeleteAllRoads()
+        internal bool DeleteAllSegments()
         {
             if (IsImporting)
                 return false;
@@ -284,17 +285,18 @@ namespace cs2_osm_importer
                 _applyWaitFrames = 0;
                 _lastPendingDefinitions = -1;
                 _lastWaitLogFrame = 0;
-                _baselineEdgeCount = CountAllRoadEdges();
+                _baselineEdgeCount = CountAllNetEdges();
                 using (var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp))
                 {
-                    _baselineRoadEdges = edgeArray.ToHashSet();
+                    _baselineSegments = edgeArray.ToHashSet();
                 }
                 _baselinePillarEntities = QueryPillarEntities().ToHashSet();
                 Mod.log.Info($"Baseline pillar entity count: {_baselinePillarEntities.Count}");
+                _generatedEdgeEntities.Clear();
                 _queuedSegmentInfos.Clear();
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _roadNamesApplied = false;
-                Mod.log.Info($"Baseline road edge count before OSM road generation: {_baselineEdgeCount}");
+                Mod.log.Info($"Baseline edge count before OSM road generation: {_baselineEdgeCount}");
                 SetStatus(_generationTypeOrder.Count > 0
                     ? LF("OsmImporter.Status.GenerationProgress", "Generating \"{0}\" roads ({1}/{2})", _generationTypeOrder[0], 1, _generationTypeOrder.Count)
                     : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
@@ -432,7 +434,7 @@ namespace cs2_osm_importer
             {
                 _applyWaitFrames++;
                 var pendingDefinitions = CountPendingDefinitions();
-                var generatedRoadEdges = Math.Max(0, CountAllRoadEdges() - _baselineEdgeCount);
+                var generatedRoadEdges = Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
                 SetStatus(pendingDefinitions > 0
@@ -707,7 +709,7 @@ namespace cs2_osm_importer
 
             foreach (var entity in entities)
             {
-                if (_baselineRoadEdges.Contains(entity))
+                if (_baselineSegments.Contains(entity))
                     continue;
 
                 if (!edgeLookup.HasComponent(entity))
@@ -740,7 +742,7 @@ namespace cs2_osm_importer
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
-                Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete roads and rails: {0}", ex.Message));
+                Complete(LF("OsmImporter.Status.DeleteFailed", "Failed to delete segments: {0}", ex.Message));
             }
         }
 
@@ -843,7 +845,7 @@ namespace cs2_osm_importer
             var newEdges = new List<Entity>();
             foreach (var entity in edgeArray)
             {
-                if (!_baselineRoadEdges.Contains(entity))
+                if (!_baselineSegments.Contains(entity))
                     newEdges.Add(entity);
             }
 
@@ -932,6 +934,7 @@ namespace cs2_osm_importer
                     }
                 }
                 namedCount++;
+                _generatedEdgeEntities.Add(edgeEntity);
             }
 
             _roadNamesApplied = true;
@@ -1234,7 +1237,7 @@ namespace cs2_osm_importer
             var newEdges = new List<Entity>();
             foreach (var entity in edgeArray)
             {
-                if (!_baselineRoadEdges.Contains(entity))
+                if (!_baselineSegments.Contains(entity))
                     newEdges.Add(entity);
             }
             edgeArray.Dispose();
@@ -1270,7 +1273,7 @@ namespace cs2_osm_importer
 
             var queuedTotal = _queuedSegmentInfos.Count;
             var queuedNonEmpty = _queuedSegmentInfos.Count(n => !string.IsNullOrWhiteSpace(n.Name));
-            var baselineEdgeCount = _baselineRoadEdges.Count;
+            var baselineEdgeCount = _baselineSegments.Count;
 
             var result = LF("OsmImporter.Status.ValidationSummary", "Validation: {0} new edges ({1} baseline), {2} named, {3} unnamed. Queued: {4} total, {5} non-empty. Samples: {6}", totalNewEdges, baselineEdgeCount, namedCount, unnamedCount, queuedTotal, queuedNonEmpty, sampleStr);
             Mod.log.Info(result);
@@ -1641,7 +1644,7 @@ namespace cs2_osm_importer
             return count;
         }
 
-        private int CountAllRoadEdges()
+        private int CountAllNetEdges()
         {
             using var entities = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
 
@@ -1684,6 +1687,16 @@ namespace cs2_osm_importer
                     }
                 }
             }
+
+            foreach (var entity in _generatedEdgeEntities)
+            {
+                if (!EntityManager.HasComponent<Deleted>(entity) && deleted.Add(entity))
+                {
+                    EntityManager.AddComponentData(entity, new Deleted());
+                    EntityManager.AddComponentData(entity, new Updated());
+                }
+            }
+            _generatedEdgeEntities.Clear();
 
             return deleted.Count;
         }

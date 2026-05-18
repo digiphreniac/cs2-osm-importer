@@ -44,7 +44,7 @@ namespace cs2_osm_importer
             AddBinding(_roadTypeCounts);
             AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "generateOSMRoads", GenerateOSMRoads, ValueReaders.Create<string>()));
-            AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllRoads", DeleteAllRoads, ValueReaders.Create<string>()));
+            AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllSegments", DeleteAllSegments, ValueReaders.Create<string>()));
 #if DEBUG
             AddBinding(new ValueBinding<bool>(Mod.Id, "isDebugMode", true));
             AddBinding(new TriggerBinding<string>(Mod.Id, "tryValidate", TryValidateRoadNames, ValueReaders.Create<string>()));
@@ -120,9 +120,9 @@ namespace cs2_osm_importer
             UpdateImportBindings(force: true);
         }
 
-        private void DeleteAllRoads(string payload)
+        private void DeleteAllSegments(string payload)
         {
-            if (!_importSystem.DeleteAllRoads())
+            if (!_importSystem.DeleteAllSegments())
             {
                 _status.Update(OsmLocalization.T("OsmImporter.Status.OperationInProgress", "An OSM operation is already running."));
                 return;
