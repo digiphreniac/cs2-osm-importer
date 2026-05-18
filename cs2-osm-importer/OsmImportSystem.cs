@@ -29,6 +29,7 @@ namespace cs2_osm_importer
         private enum WorkPhase
         {
             Idle,
+            LoadDataQueued,
             LoadData,
             QueueDefinitions,
             WaitForGameApply,
@@ -84,12 +85,15 @@ namespace cs2_osm_importer
 
         private List<QueuedSegmentInfo> _queuedSegmentInfos = new List<QueuedSegmentInfo>();
         private List<string> _generationTypeOrder = new List<string>();
+        private Dictionary<string, int> _typeWayCounts = new Dictionary<string, int>();
+        private int _totalGenerationWays;
         private bool _roadNamesApplied;
         private WorkPhase _phase = WorkPhase.Idle;
 
         internal bool IsImporting { get; private set; }
         private string _status = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         internal string Status => _status;
+        internal string StatusSummary { get; private set; } = string.Empty;
         internal bool HasGeneratedAssets { get; private set; }
         internal bool HasLoadedData => _document != null && _document.Ways.Count > 0;
         internal string RoadTypeCountsJson { get; private set; } = "{}";
@@ -101,6 +105,24 @@ namespace cs2_osm_importer
         private static string LF(string key, string fallback, params object[] args) => OsmLocalization.F(key, fallback, args);
 
         private static string DisplayHighwayType(string highwayType) => OsmLocalization.GetRoadTypeName(highwayType, highwayType);
+
+        private string BuildGenerationDetailStatus()
+        {
+            if (_generationTypeOrder == null || _generationTypeOrder.Count == 0)
+                return L("OsmImporter.Status.Ready", "Ready.");
+
+            var parts = new List<string>(_generationTypeOrder.Count);
+            for (var i = 0; i < _generationTypeOrder.Count; i++)
+            {
+                var type = _generationTypeOrder[i];
+                var count = _typeWayCounts.TryGetValue(type, out var c) ? c : 0;
+                var label = i < _typeIndex ? "DONE"
+                          : i == _typeIndex ? "GENERATING"
+                          : "WAITING";
+                parts.Add($"{DisplayHighwayType(type)} ({count}): {label}");
+            }
+            return string.Join(" | ", parts);
+        }
 
         protected override void OnCreate()
         {
@@ -119,6 +141,9 @@ namespace cs2_osm_importer
 
             switch (_phase)
             {
+                case WorkPhase.LoadDataQueued:
+                    _phase = WorkPhase.LoadData;
+                    break;
                 case WorkPhase.LoadData:
                     LoadData();
                     break;
@@ -154,8 +179,8 @@ namespace cs2_osm_importer
 
             _pendingLoadOptions = options;
             IsImporting = true;
-            _phase = WorkPhase.LoadData;
-            SetStatus(L("OsmImporter.Status.LoadStarted", "OSM file path accepted. Loading..."));
+            _phase = WorkPhase.LoadDataQueued;
+            SetStatus(L("OsmImporter.Status.LoadingWithWarning", "loading... (game might be frozen for some time)"));
             Mod.log.Info($"Queued OSM load for '{options.Path}'");
             return true;
         }
@@ -187,7 +212,7 @@ namespace cs2_osm_importer
 
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
-            SetStatus(L("OsmImporter.Status.DeletingRoads", "Deleting roads..."));
+            SetStatus(L("OsmImporter.Status.DeletingSegments", "Deleting all segments..."));
             return true;
         }
 
@@ -295,10 +320,21 @@ namespace cs2_osm_importer
                 _generatedEdgeEntities.Clear();
                 _queuedSegmentInfos.Clear();
                 _generationTypeOrder = BuildGenerationTypeOrder();
+                _typeWayCounts.Clear();
+                _totalGenerationWays = 0;
+                foreach (var type in _generationTypeOrder)
+                {
+                    var count = GetWaysForHighwayType(type).Count;
+                    _typeWayCounts[type] = count;
+                    _totalGenerationWays += count;
+                }
                 _roadNamesApplied = false;
+                StatusSummary = _totalGenerationWays > 0
+                    ? $"Generating... (0%)"
+                    : L("OsmImporter.Status.GeneratingRoads", "generating...");
                 Mod.log.Info($"Baseline edge count before OSM road generation: {_baselineEdgeCount}");
                 SetStatus(_generationTypeOrder.Count > 0
-                    ? LF("OsmImporter.Status.GenerationProgress", "Generating \"{0}\" roads ({1}/{2})", _generationTypeOrder[0], 1, _generationTypeOrder.Count)
+                    ? BuildGenerationDetailStatus()
                     : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 _loggedFirstQueuedSegment = false;
             }
@@ -388,12 +424,20 @@ namespace cs2_osm_importer
                     _pointIndex = 0;
                 }
 
-                var currentTypeLabel = _typeIndex < _generationTypeOrder.Count
-                    ? DisplayHighwayType(_generationTypeOrder[_typeIndex])
-                    : string.Empty;
-                SetStatus(!string.IsNullOrWhiteSpace(currentTypeLabel)
-                    ? LF("OsmImporter.Status.GenerationProgress", "Generating \"{0}\" roads ({1}/{2})", currentTypeLabel, Math.Min(_typeIndex + 1, _generationTypeOrder.Count), _generationTypeOrder.Count)
-                    : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
+                SetStatus(BuildGenerationDetailStatus());
+                if (_typeIndex < _generationTypeOrder.Count)
+                {
+                    var completedWays = 0;
+                    for (var i = 0; i < _typeIndex && i < _generationTypeOrder.Count; i++)
+                    {
+                        if (_typeWayCounts.TryGetValue(_generationTypeOrder[i], out var c))
+                            completedWays += c;
+                    }
+                    var percent = _totalGenerationWays > 0
+                        ? (completedWays * 100 / _totalGenerationWays)
+                        : 0;
+                    StatusSummary = $"Generating... ({percent}%)";
+                }
                 if (_importedSegments - _lastLoggedSegments >= 1000)
                 {
                     _lastLoggedSegments = _importedSegments;
@@ -418,7 +462,7 @@ namespace cs2_osm_importer
                             $"min={FormatPoint(_document.Min)}, max={FormatPoint(_document.Max)}");
                     }
                     _phase = WorkPhase.WaitForGameApply;
-                    SetStatus(LF("OsmImporter.Status.QueuedGeneration", "Queued {0} road definitions. Waiting for CS2 to generate roads...", _importedSegments));
+                    StatusSummary = "Generation complete";
                 }
             }
             catch (Exception ex)
@@ -437,9 +481,30 @@ namespace cs2_osm_importer
                 var generatedRoadEdges = Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
-                SetStatus(pendingDefinitions > 0
-                    ? LF("OsmImporter.Status.WaitingForCS2", "Waiting for CS2 road generation... {0}/{1} definitions consumed", consumedDefinitions, _importedSegments)
-                    : LF("OsmImporter.Status.CS2Verifying", "CS2 consumed {0} OSM definitions. Verifying generated roads...", _importedSegments));
+                string detail;
+                if (_generationTypeOrder.Count > 0)
+                {
+                    var parts = new List<string>(_generationTypeOrder.Count);
+                    for (var i = 0; i < _generationTypeOrder.Count; i++)
+                    {
+                        var t = _generationTypeOrder[i];
+                        var cnt = _typeWayCounts.TryGetValue(t, out var cc) ? cc : 0;
+                        var lbl = "WAITING";
+                        if (i < _typeIndex) lbl = "DONE";
+                        else if (i == _typeIndex) lbl = "GENERATING";
+                        parts.Add($"{DisplayHighwayType(t)} ({cnt}): {lbl}");
+                    }
+                    detail = string.Join(" | ", parts);
+                }
+                else
+                {
+                    detail = L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads...");
+                }
+                var waitMsg = pendingDefinitions > 0
+                    ? LF("OsmImporter.Status.WaitingForCS2", "CS2 gen... {0}/{1}", consumedDefinitions, _importedSegments)
+                    : LF("OsmImporter.Status.CS2Verifying", "Verifying... CS2 consumed {0}", _importedSegments);
+                SetStatus(detail);
+                StatusSummary = waitMsg;
 
                 if (pendingDefinitions != _lastPendingDefinitions && _applyWaitFrames - _lastWaitLogFrame >= 300)
                 {
@@ -470,7 +535,8 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
-                    SetStatus(message);
+                    SetStatus(BuildGenerationDetailStatus());
+                    StatusSummary = message;
                     _pillarWaitFrames = 0;
                     _phase = WorkPhase.RemoveIntersectingPillars;
                     return;
@@ -484,7 +550,8 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
                     HasGeneratedAssets = true;
-                    SetStatus(message);
+                    SetStatus(BuildGenerationDetailStatus());
+                    StatusSummary = message;
                     _pillarWaitFrames = 0;
                     _phase = WorkPhase.RemoveIntersectingPillars;
                 }
@@ -509,7 +576,7 @@ namespace cs2_osm_importer
                 if (allPillarEntities == null || allPillarEntities.Count == 0)
                 {
                     Mod.log.Info("No pillar entities found. Skipping pillar intersection check.");
-                    Complete(_status);
+                    Complete(L("OsmImporter.Status.RoadGenerationComplete", "Road generation complete."));
                     return;
                 }
 
@@ -523,7 +590,7 @@ namespace cs2_osm_importer
                 if (newPillars.Count == 0)
                 {
                     Mod.log.Info("No new pillar entities found to check for intersection.");
-                    Complete(_status);
+                    Complete(L("OsmImporter.Status.RoadGenerationComplete", "Road generation complete."));
                     return;
                 }
 
@@ -534,7 +601,7 @@ namespace cs2_osm_importer
                 {
                     Mod.log.Info("No generated road edges found. Skipping pillar intersection check.");
                     roadEdgePositions.Dispose();
-                    Complete(_status);
+                    Complete(L("OsmImporter.Status.RoadGenerationComplete", "Road generation complete."));
                     return;
                 }
 
@@ -610,9 +677,8 @@ namespace cs2_osm_importer
                     $"{failedPosCount} failed position reads, " +
                     $"deleted {intersectingCount} intersecting. Threshold: {threshold:F1}m");
 
-                Complete(LF("OsmImporter.Status.PillarCleanupComplete",
-                    "Pillar cleanup: {0}/{1} intersecting pillars removed.",
-                    intersectingCount, totalChecked));
+                Complete(LF("OsmImporter.Status.RoadGenerationComplete",
+                    "Road generation complete."));
             }
             catch (Exception ex)
             {
@@ -733,10 +799,9 @@ namespace cs2_osm_importer
         {
             try
             {
-                var deletedEdges = MarkNetEdgesDeleted();
-                var deletedNodes = MarkNetNodesDeleted();
+                var deletedEdges = DeleteAllGeneratedSegments();
                 HasGeneratedAssets = false;
-                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges and {1} nodes for deletion.", deletedEdges, deletedNodes));
+                Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges for deletion.", deletedEdges));
                 Mod.log.Info(Status);
             }
             catch (Exception ex)
@@ -746,9 +811,31 @@ namespace cs2_osm_importer
             }
         }
 
+        private int DeleteAllGeneratedSegments()
+        {
+            var deleted = 0;
+
+            foreach (var entity in _generatedEdgeEntities)
+            {
+                if (!EntityManager.Exists(entity))
+                    continue;
+
+                if (EntityManager.HasComponent<Deleted>(entity))
+                    continue;
+
+                EntityManager.AddComponentData(entity, new Deleted());
+                EntityManager.AddComponentData(entity, new Updated());
+                deleted++;
+            }
+            _generatedEdgeEntities.Clear();
+
+            return deleted;
+        }
+
         private void Complete(string message)
         {
             SetStatus(message);
+            StatusSummary = string.Empty;
             IsImporting = false;
             _phase = WorkPhase.Idle;
             _pendingLoadOptions = null;
@@ -1293,6 +1380,19 @@ namespace cs2_osm_importer
             if (string.IsNullOrWhiteSpace(highwayType))
                 return _prefabEntity;
 
+            if (IsPathLikeHighwayType(highwayType))
+            {
+                var pathMatch = TryGetPathPrefabForHighwayType(highwayType, lanes);
+                if (pathMatch != Entity.Null)
+                {
+                    return pathMatch;
+                }
+
+                Mod.log.Info(
+                    $"No path-specific prefab match for highway type '{highwayType}' with {Math.Max(lanes, 0)} lanes. " +
+                    "Falling back to road-prefab selection.");
+            }
+
             if (lanes <= 0)
             {
                 var defaultLaneCount = GetDefaultLaneCountForHighwayType(highwayType);
@@ -1351,14 +1451,81 @@ namespace cs2_osm_importer
         }
 
         private Entity TryFindPrefabForHighwayType(string highwayType, int lanes)
+            => TryFindPrefabForHighwayType(highwayType, lanes, IsSuitableRoadPrefabName, GetPreferredPrefabNames(highwayType));
+
+        private Entity TryGetPathPrefabForHighwayType(string highwayType, int lanes)
+        {
+            var preferredNames = GetPreferredPathPrefabNames(highwayType);
+
+            if (lanes <= 0)
+            {
+                var defaultLaneCount = GetDefaultLaneCountForHighwayType(highwayType);
+                if (defaultLaneCount > 0)
+                {
+                    var defaultLaneKey = $"path:{highwayType}:{defaultLaneCount}";
+                    if (_laneSpecificPrefabEntities.TryGetValue(defaultLaneKey, out var cachedDefaultLane))
+                        return cachedDefaultLane;
+
+                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount, IsSuitablePathPrefabName, preferredNames);
+                    if (defaultLaneMatch != Entity.Null)
+                    {
+                        _laneSpecificPrefabEntities[defaultLaneKey] = defaultLaneMatch;
+                        Mod.log.Info(
+                            $"Selected default lane path prefab '{DescribePrefab(defaultLaneMatch)}' for highway type '{highwayType}' with {defaultLaneCount} lanes.");
+                        return defaultLaneMatch;
+                    }
+                }
+            }
+
+            if (lanes > 0)
+            {
+                var laneKey = $"path:{highwayType}:{lanes}";
+                if (_laneSpecificPrefabEntities.TryGetValue(laneKey, out var laneCached))
+                    return laneCached;
+
+                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes, IsSuitablePathPrefabName, preferredNames);
+                if (laneMatch != Entity.Null)
+                {
+                    _laneSpecificPrefabEntities[laneKey] = laneMatch;
+                    Mod.log.Info(
+                        $"Selected path prefab '{DescribePrefab(laneMatch)}' for highway type '{highwayType}' " +
+                        $"with {lanes} lanes.");
+                    return laneMatch;
+                }
+
+                Mod.log.Info(
+                    $"No lane-specific path prefab match for highway type '{highwayType}' with {lanes} lanes. " +
+                    "Falling back to type-only path selection.");
+            }
+
+            var typeKey = $"path:{highwayType}";
+            if (_laneSpecificPrefabEntities.TryGetValue(typeKey, out var cachedType))
+                return cachedType;
+
+            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0, IsSuitablePathPrefabName, preferredNames);
+            if (typeMatch != Entity.Null)
+            {
+                _laneSpecificPrefabEntities[typeKey] = typeMatch;
+                Mod.log.Info(
+                    $"Selected path prefab '{DescribePrefab(typeMatch)}' for highway type '{highwayType}'.");
+                return typeMatch;
+            }
+
+            return Entity.Null;
+        }
+
+        private Entity TryFindPrefabForHighwayType(
+            string highwayType,
+            int lanes,
+            Func<string, string, bool> isSuitablePrefabName,
+            IEnumerable<string> preferredNames)
         {
             var candidates = GetRoadPrefabCandidates().ToList();
-            var preferredNames = GetPreferredPrefabNames(highwayType);
 
             foreach (var preferredName in preferredNames)
             {
                     var match = candidates.FirstOrDefault(p =>
-                        IsSuitableRoadPrefabName(p.name, highwayType) &&
+                        isSuitablePrefabName(p.name, highwayType) &&
                         p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0 &&
                         (lanes <= 0 || ParsePrefabLaneCount(p.name) == lanes || ParsePrefabLaneCount(p.name) == 0));
                 if (match != null && _prefabSystem.TryGetEntity(match, out var entity))
@@ -1468,7 +1635,7 @@ namespace cs2_osm_importer
                     return new[] { "Service", "Street", "Road" };
                 case "footway":
                 case "pedestrian":
-                    return new[] { "Pedestrian", "Street" };
+                    return new[] { "Pedestrian Path", "Pedestrian Walkway", "Walkway", "Footpath", "Path" };
                 case "bridleway":
                     return new[] { "Pedestrian", "Path", "Street" };
                 case "cycleway":
@@ -1486,6 +1653,34 @@ namespace cs2_osm_importer
                     return new[] { "Tram Track", "TramTrack", "Oneway Tram Track", "OnewayTramTrack", "Double Tram Track", "DoubleTramTrack" };
                 default:
                     return new[] { "Street", "Road" };
+            }
+        }
+
+        private static string[] GetPreferredPathPrefabNames(string highwayType)
+        {
+            switch (highwayType.ToLowerInvariant())
+            {
+                case "cycleway":
+                    return new[] { "Cycleway", "Bike Path", "Bicycle Path", "Path", "Walkway" };
+                case "bridleway":
+                    return new[] { "Trail", "Bridleway", "Path", "Walkway", "Pedestrian Path" };
+                case "footway":
+                case "pedestrian":
+                    return new[]
+                    {
+                        "Pavement Path",
+                        "PedestrianPathWide01",
+                        "PedestrianPathwithBikeLanes",
+                        "TwoWayBikePath",
+                        "Pedestrian Path",
+                        "Pedestrian Walkway",
+                        "Walkway",
+                        "Footpath",
+                        "Path",
+                        "Pedestrian"
+                    };
+                default:
+                    return new[] { "Path", "Walkway", "Pedestrian Path" };
             }
         }
 
@@ -1538,6 +1733,53 @@ namespace cs2_osm_importer
 
         private static bool IsSuitableRoadPrefabName(string prefabName) =>
             IsSuitableRoadPrefabName(prefabName, string.Empty);
+
+        private static bool IsSuitablePathPrefabName(string prefabName, string highwayType)
+        {
+            if (string.IsNullOrWhiteSpace(prefabName))
+                return false;
+
+            var lower = prefabName.ToLowerInvariant();
+            if (lower.Contains("pillar") ||
+                lower.Contains("extrados") ||
+                lower.Contains("cable stayed") ||
+                lower.Contains("cable-stayed") ||
+                lower.Contains("bridge") ||
+                lower.Contains("support") ||
+                lower.Contains("tunnel") ||
+                lower.Contains("interchange") ||
+                lower.Contains("highway") ||
+                lower.Contains("freeway") ||
+                lower.Contains("boulevard") ||
+                lower.Contains("street") ||
+                lower.Contains("avenue") ||
+                lower.Contains("road"))
+            {
+                return false;
+            }
+
+            return highwayType.ToLowerInvariant() switch
+            {
+                "cycleway" => lower.Contains("cycle") || lower.Contains("bike") || lower.Contains("bicycle") || lower.Contains("path") || lower.Contains("walkway"),
+                "bridleway" => lower.Contains("trail") || lower.Contains("path") || lower.Contains("walkway") || lower.Contains("pedestrian"),
+                "footway" or "pedestrian" => lower.Contains("pedestrian") || lower.Contains("walkway") || lower.Contains("footpath") || lower.Contains("path"),
+                _ => lower.Contains("path") || lower.Contains("walkway") || lower.Contains("trail"),
+            };
+        }
+
+        private static bool IsPathLikeHighwayType(string highwayType)
+        {
+            switch ((highwayType ?? string.Empty).ToLowerInvariant())
+            {
+                case "footway":
+                case "pedestrian":
+                case "bridleway":
+                case "cycleway":
+                    return true;
+                default:
+                    return false;
+            }
+        }
 
         private static int GetDefaultLaneCountForHighwayType(string highwayType)
         {
@@ -1653,83 +1895,12 @@ namespace cs2_osm_importer
 
         private EntityQuery GetCurrentNetEdges()
         {
-            return GetEntityQuery(
-                ComponentType.ReadOnly<Edge>(),
-                ComponentType.ReadOnly<Road>(),
-                ComponentType.ReadOnly<PrefabRef>(),
-                ComponentType.Exclude<Deleted>());
-        }
-
-        private int MarkNetEdgesDeleted()
-        {
-            var deleted = new HashSet<Entity>();
-            var edgeTypes = new[]
+            return GetEntityQuery(new EntityQueryDesc
             {
-                ComponentType.ReadOnly<Road>(),
-                ComponentType.ReadOnly<TrainTrack>(),
-                ComponentType.ReadOnly<SubwayTrack>(),
-                ComponentType.ReadOnly<TramTrack>(),
-            };
-
-            foreach (var type in edgeTypes)
-            {
-                using var entities = GetEntityQuery(
-                    ComponentType.ReadOnly<Edge>(),
-                    type,
-                    ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
-
-                foreach (var entity in entities)
-                {
-                    if (deleted.Add(entity))
-                    {
-                        EntityManager.AddComponentData(entity, new Deleted());
-                        EntityManager.AddComponentData(entity, new Updated());
-                    }
-                }
-            }
-
-            foreach (var entity in _generatedEdgeEntities)
-            {
-                if (!EntityManager.HasComponent<Deleted>(entity) && deleted.Add(entity))
-                {
-                    EntityManager.AddComponentData(entity, new Deleted());
-                    EntityManager.AddComponentData(entity, new Updated());
-                }
-            }
-            _generatedEdgeEntities.Clear();
-
-            return deleted.Count;
-        }
-
-        private int MarkNetNodesDeleted()
-        {
-            var deleted = new HashSet<Entity>();
-            var nodeTypes = new[]
-            {
-                ComponentType.ReadOnly<Road>(),
-                ComponentType.ReadOnly<TrainTrack>(),
-                ComponentType.ReadOnly<SubwayTrack>(),
-                ComponentType.ReadOnly<TramTrack>(),
-            };
-
-            foreach (var type in nodeTypes)
-            {
-                using var entities = GetEntityQuery(
-                    ComponentType.ReadOnly<Node>(),
-                    type,
-                    ComponentType.Exclude<Deleted>()).ToEntityArray(Allocator.Temp);
-
-                foreach (var entity in entities)
-                {
-                    if (deleted.Add(entity))
-                    {
-                        EntityManager.AddComponentData(entity, new Deleted());
-                        EntityManager.AddComponentData(entity, new Updated());
-                    }
-                }
-            }
-
-            return deleted.Count;
+                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<PrefabRef>() },
+                Any = new[] { ComponentType.ReadOnly<Road>(), ComponentType.ReadOnly<TrainTrack>(), ComponentType.ReadOnly<SubwayTrack>(), ComponentType.ReadOnly<TramTrack>() },
+                None = new[] { ComponentType.ReadOnly<Deleted>() },
+            });
         }
 
         private bool TryGetRoadPrefab(string name, out NetPrefab prefab, out Entity entity)

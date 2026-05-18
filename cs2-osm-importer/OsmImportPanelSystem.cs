@@ -166,6 +166,7 @@ namespace cs2_osm_importer
                 UpdateImportSectionState();
                 UpdateRoadTypeCounts();
                 UpdateStatus(_importSystem.Status);
+                FlushStatusRebuild();
                 UpdateControlStates();
                 UpdateGeneratedState();
                 UpdateWaysToGenerateLabel();
@@ -480,35 +481,57 @@ namespace cs2_osm_importer
                 },
             };
 
+            var generateChildren = new List<IWidget>
+            {
+                _generateRoadTypesInstructionLabel,
+                supportedTypesLabel,
+                _generateRoadTypeSelectionWidget,
+                _waysToCreateLabel,
+                generateAdvancedSettings,
+                _generateButton,
+                _deleteButton,
+            };
+
+            var shouldShowDetail = _importSystem != null && _importSystem.IsImporting && _statusText.Contains(" | ");
+            if (shouldShowDetail)
+            {
+                var parts = _statusText.Split(new[] { " | " }, StringSplitOptions.RemoveEmptyEntries);
+                for (var i = 0; i < parts.Length; i += 3)
+                {
+                    var rowChildren = new List<IWidget>();
+                    for (var j = i; j < i + 3 && j < parts.Length; j++)
+                        rowChildren.Add(new Label { displayName = parts[j].Trim() });
+                    generateChildren.Add(CreateRow(rowChildren));
+                }
+            }
+
             var generateSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
                 expanded = true,
                 disabled = () => !_importSystem.HasLoadedData,
-                children = new List<IWidget>
-                {
-                    _generateRoadTypesInstructionLabel,
-                    supportedTypesLabel,
-                    _generateRoadTypeSelectionWidget,
-                    _waysToCreateLabel,
-                    generateAdvancedSettings,
-                    _generateButton,
-                    _deleteButton,
-                },
+                children = generateChildren,
             };
 
             content.Add(generateSection);
 
-            content.Add(_statusLabel);
-
-            return new List<IWidget>
+            var scrollable = new Scrollable
             {
-                new Scrollable
-                {
-                    direction = Direction.Vertical,
-                    children = content,
-                },
+                direction = Direction.Vertical,
+                children = content,
             };
+
+            var rootChildren = new List<IWidget> { scrollable };
+
+            var summaryText = _importSystem?.StatusSummary ?? string.Empty;
+            var bottomText = !string.IsNullOrEmpty(summaryText) ? summaryText : (shouldShowDetail ? string.Empty : _statusText);
+            if (!string.IsNullOrEmpty(bottomText))
+            {
+                rootChildren.Add(new Divider());
+                rootChildren.Add(new Label { displayName = bottomText });
+            }
+
+            return rootChildren;
         }
 
         private void LoadOsmData()
@@ -544,6 +567,7 @@ namespace cs2_osm_importer
             }
 
             UpdateStatus(_importSystem.Status);
+            FlushStatusRebuild();
         }
 
         private void PromptLoadOsmDataConfirmation()
@@ -691,13 +715,26 @@ namespace cs2_osm_importer
             return OsmLocalization.F("OsmImporter.Format.SelectedCount", "{0} selected", selected.Count);
         }
 
+        private string _lastDisplayedStatus = string.Empty;
+        private bool _statusNeedsRebuild;
+
         private void UpdateStatus(string status)
         {
-            _statusText = string.IsNullOrWhiteSpace(status) ? OsmLocalization.T("OsmImporter.Status.Ready", "Ready.") : status;
-            if (_statusLabel != null)
+            var text = string.IsNullOrWhiteSpace(status) ? OsmLocalization.T("OsmImporter.Status.Ready", "Ready.") : status;
+            _statusText = text;
+            if (_statusNeedsRebuild || _lastDisplayedStatus != text)
             {
-                _statusLabel.displayName = _statusText;
+                _lastDisplayedStatus = text;
+                _statusNeedsRebuild = true;
             }
+        }
+
+        private void FlushStatusRebuild()
+        {
+            if (!_statusNeedsRebuild || _statusLabel == null)
+                return;
+            _statusNeedsRebuild = false;
+            children = BuildChildren();
         }
 
         private void UpdateImportSectionState()
@@ -796,8 +833,9 @@ namespace cs2_osm_importer
             }
             else if (_importSystem != null)
             {
-                UpdateStatus(_importSystem.Status);
-            }
+            UpdateStatus(_importSystem.Status);
+            FlushStatusRebuild();
+        }
             else
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.Ready", "Ready."));
