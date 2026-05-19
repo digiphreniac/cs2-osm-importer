@@ -16,6 +16,8 @@ using Game.Tools;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 
 namespace cs2_osm_importer
 {
@@ -53,6 +55,41 @@ namespace cs2_osm_importer
         private readonly Dictionary<string, Entity> _highwayPrefabEntities = new Dictionary<string, Entity>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _highwayPrefabNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Entity> _laneSpecificPrefabEntities = new Dictionary<string, Entity>(StringComparer.OrdinalIgnoreCase);
+        private static bool _prefabRulesLoaded;
+        private static readonly object _prefabRulesLock = new object();
+
+        // Edit these once to lock your preferred prefab mapping.
+        // Lane buckets: 1, 2, 3, 4, 5, 6+
+        // Sidewalk buckets: Any, None, Sidewalk, WideSidewalk
+        // Oneway buckets: Any, No, AnyOneWay, Forward, Backward
+        internal static readonly Dictionary<string, List<PrefabSelectionRule>> DefaultPrefabRulesByRoadType = new Dictionary<string, List<PrefabSelectionRule>>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "motorway", new List<PrefabSelectionRule>() },
+            { "trunk", new List<PrefabSelectionRule>() },
+            { "primary", new List<PrefabSelectionRule>() },
+            { "secondary", new List<PrefabSelectionRule>() },
+            { "tertiary", new List<PrefabSelectionRule>() },
+            { "unclassified", new List<PrefabSelectionRule>() },
+            { "residential", new List<PrefabSelectionRule>() },
+            { "service", new List<PrefabSelectionRule>() },
+            { "living_street", new List<PrefabSelectionRule>() },
+            { "road", new List<PrefabSelectionRule>() },
+            { "motorway_link", new List<PrefabSelectionRule>() },
+            { "trunk_link", new List<PrefabSelectionRule>() },
+            { "primary_link", new List<PrefabSelectionRule>() },
+            { "secondary_link", new List<PrefabSelectionRule>() },
+            { "tertiary_link", new List<PrefabSelectionRule>() },
+            { "footway", new List<PrefabSelectionRule>() },
+            { "bridleway", new List<PrefabSelectionRule>() },
+            { "monorail", new List<PrefabSelectionRule>() },
+            { "rail", new List<PrefabSelectionRule>() },
+            { "light_rail", new List<PrefabSelectionRule>() },
+            { "subway", new List<PrefabSelectionRule>() },
+            { "tram", new List<PrefabSelectionRule>() },
+            { "track", new List<PrefabSelectionRule>() },
+            { "cycleway", new List<PrefabSelectionRule>() },
+            { "pedestrian", new List<PrefabSelectionRule>() },
+        };
         private int _wayIndex;
         private int _pointIndex;
         private int _typeIndex;
@@ -73,6 +110,7 @@ namespace cs2_osm_importer
         private int _lastWaitLogFrame;
         private bool _loggedFirstQueuedSegment;
         private bool _loggedTerrainMethodProbe;
+        private bool _loggedPrefabCatalog;
         private bool _hasTerrainHeightData;
         private TerrainHeightData _terrainHeightData;
         private struct QueuedSegmentInfo
@@ -141,6 +179,8 @@ namespace cs2_osm_importer
 
         protected override void OnUpdate()
         {
+            LogPrefabCatalogOnce();
+
             if (!IsImporting)
                 return;
 
@@ -376,7 +416,7 @@ namespace cs2_osm_importer
                     while (_wayIndex < typeWays.Count)
                     {
                         var way = typeWays[_wayIndex];
-                        var typePrefab = GetPrefabForHighwayType(highwayType, way.Lanes);
+                        var typePrefab = GetPrefabForHighwayType(way);
 
                         while (_pointIndex < way.Points.Count - 1)
                         {
@@ -546,10 +586,7 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
-                    SetStatus(BuildGenerationDetailStatus());
-                    StatusSummary = message;
-                    _pillarWaitFrames = 0;
-                    _phase = WorkPhase.RemoveIntersectingPillars;
+                    Complete(message);
                     return;
                 }
 
@@ -561,10 +598,7 @@ namespace cs2_osm_importer
 
                     Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
                     HasGeneratedAssets = true;
-                    SetStatus(BuildGenerationDetailStatus());
-                    StatusSummary = message;
-                    _pillarWaitFrames = 0;
-                    _phase = WorkPhase.RemoveIntersectingPillars;
+                    Complete(message);
                 }
             }
             catch (Exception ex)
@@ -1395,10 +1429,41 @@ namespace cs2_osm_importer
                    _activeGenerateOptions.HighwayTypes.Contains(way.Highway);
         }
 
-        private Entity GetPrefabForHighwayType(string highwayType, int lanes)
+        private Entity GetPrefabForHighwayType(OsmWay way)
+        {
+            if (way == null || string.IsNullOrWhiteSpace(way.Highway))
+                return _prefabEntity;
+
+            if (HasManualPrefabRulesForWay(way))
+            {
+                if (TryGetManualPrefabForWay(way, out var manualPrefab))
+                    return manualPrefab;
+
+                Mod.log.Warn($"Manual prefab rules exist for highway type '{way.Highway}' but no exact prefab name matched. Using the default fallback prefab instead of heuristic road selection.");
+                return _prefabEntity;
+            }
+
+            return GetPrefabForHighwayType(way.Highway, way.Lanes, way.Sidewalk);
+        }
+
+        private Entity GetPrefabForHighwayType(string highwayType, int lanes, OsmSidewalkType sidewalk)
         {
             if (string.IsNullOrWhiteSpace(highwayType))
                 return _prefabEntity;
+
+            var requiresSidewalk = sidewalk != OsmSidewalkType.None;
+            var cacheKey = GetRoadPrefabCacheKey(highwayType, lanes, sidewalk);
+
+            if (IsTrackLikeHighwayType(highwayType))
+            {
+                var trackMatch = TryGetTrackPrefabForHighwayType(highwayType, lanes);
+                if (trackMatch != Entity.Null)
+                    return trackMatch;
+
+                Mod.log.Info(
+                    $"No track-specific prefab match for highway type '{highwayType}' with {Math.Max(lanes, 0)} lanes. " +
+                    "Falling back to road-prefab selection.");
+            }
 
             if (IsPathLikeHighwayType(highwayType))
             {
@@ -1418,11 +1483,11 @@ namespace cs2_osm_importer
                 var defaultLaneCount = GetDefaultLaneCountForHighwayType(highwayType);
                 if (defaultLaneCount > 0)
                 {
-                    var defaultLaneKey = $"{highwayType}:{defaultLaneCount}";
+                    var defaultLaneKey = GetRoadPrefabCacheKey(highwayType, defaultLaneCount, sidewalk);
                     if (_laneSpecificPrefabEntities.TryGetValue(defaultLaneKey, out var cachedDefaultLane))
                         return cachedDefaultLane;
 
-                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount);
+                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount, requiresSidewalk);
                     if (defaultLaneMatch != Entity.Null)
                     {
                         _laneSpecificPrefabEntities[defaultLaneKey] = defaultLaneMatch;
@@ -1435,11 +1500,11 @@ namespace cs2_osm_importer
 
             if (lanes > 0)
             {
-                var laneKey = $"{highwayType}:{lanes}";
+                var laneKey = GetRoadPrefabCacheKey(highwayType, lanes, sidewalk);
                 if (_laneSpecificPrefabEntities.TryGetValue(laneKey, out var laneCached))
                     return laneCached;
 
-                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes);
+                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes, requiresSidewalk);
                 if (laneMatch != Entity.Null)
                 {
                     _laneSpecificPrefabEntities[laneKey] = laneMatch;
@@ -1454,28 +1519,30 @@ namespace cs2_osm_importer
                     "Falling back to type-only selection.");
             }
 
-            if (_highwayPrefabEntities.TryGetValue(highwayType, out var cached))
+            if (_highwayPrefabEntities.TryGetValue(cacheKey, out var cached))
                 return cached;
 
-            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0);
+            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0, requiresSidewalk);
             if (typeMatch != Entity.Null)
             {
-                _highwayPrefabEntities[highwayType] = typeMatch;
+                _highwayPrefabEntities[cacheKey] = typeMatch;
+                Mod.log.Info($"Selected road prefab '{DescribePrefab(typeMatch)}' for highway type '{highwayType}'.");
                 return typeMatch;
             }
 
-            _highwayPrefabEntities[highwayType] = _prefabEntity;
-            _highwayPrefabNames[highwayType] = _prefabName;
+            _highwayPrefabEntities[cacheKey] = _prefabEntity;
+            _highwayPrefabNames[cacheKey] = _prefabName;
             Mod.log.Warn($"No dedicated prefab found for highway type '{highwayType}'. Falling back to '{_prefabName}'.");
             return _prefabEntity;
         }
 
-        private Entity TryFindPrefabForHighwayType(string highwayType, int lanes)
-            => TryFindPrefabForHighwayType(highwayType, lanes, IsSuitableRoadPrefabName, GetPreferredPrefabNames(highwayType));
+        private Entity TryFindPrefabForHighwayType(string highwayType, int lanes, bool requiresSidewalk)
+            => TryFindPrefabForHighwayType(highwayType, lanes, requiresSidewalk, IsSuitableRoadPrefabName, GetPreferredPrefabNames(highwayType, lanes, requiresSidewalk), GetRoadPrefabCandidates().ToList());
 
         private Entity TryGetPathPrefabForHighwayType(string highwayType, int lanes)
         {
             var preferredNames = GetPreferredPathPrefabNames(highwayType);
+            var candidates = GetPathPrefabCandidates().ToList();
 
             if (lanes <= 0)
             {
@@ -1486,7 +1553,7 @@ namespace cs2_osm_importer
                     if (_laneSpecificPrefabEntities.TryGetValue(defaultLaneKey, out var cachedDefaultLane))
                         return cachedDefaultLane;
 
-                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount, IsSuitablePathPrefabName, preferredNames);
+                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount, false, IsSuitablePathPrefabName, preferredNames, candidates);
                     if (defaultLaneMatch != Entity.Null)
                     {
                         _laneSpecificPrefabEntities[defaultLaneKey] = defaultLaneMatch;
@@ -1503,7 +1570,7 @@ namespace cs2_osm_importer
                 if (_laneSpecificPrefabEntities.TryGetValue(laneKey, out var laneCached))
                     return laneCached;
 
-                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes, IsSuitablePathPrefabName, preferredNames);
+                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes, false, IsSuitablePathPrefabName, preferredNames, candidates);
                 if (laneMatch != Entity.Null)
                 {
                     _laneSpecificPrefabEntities[laneKey] = laneMatch;
@@ -1522,7 +1589,7 @@ namespace cs2_osm_importer
             if (_laneSpecificPrefabEntities.TryGetValue(typeKey, out var cachedType))
                 return cachedType;
 
-            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0, IsSuitablePathPrefabName, preferredNames);
+            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0, false, IsSuitablePathPrefabName, preferredNames, candidates);
             if (typeMatch != Entity.Null)
             {
                 _laneSpecificPrefabEntities[typeKey] = typeMatch;
@@ -1534,18 +1601,78 @@ namespace cs2_osm_importer
             return Entity.Null;
         }
 
+        private Entity TryGetTrackPrefabForHighwayType(string highwayType, int lanes)
+        {
+            var preferredNames = GetPreferredPrefabNames(highwayType, lanes, false);
+            var candidates = GetTrackPrefabCandidates().ToList();
+
+            if (lanes <= 0)
+            {
+                var defaultLaneCount = GetDefaultLaneCountForHighwayType(highwayType);
+                if (defaultLaneCount > 0)
+                {
+                    var defaultLaneKey = $"track:{highwayType}:{defaultLaneCount}";
+                    if (_laneSpecificPrefabEntities.TryGetValue(defaultLaneKey, out var cachedDefaultLane))
+                        return cachedDefaultLane;
+
+                    var defaultLaneMatch = TryFindPrefabForHighwayType(highwayType, defaultLaneCount, false, IsSuitableRoadPrefabName, preferredNames, candidates);
+                    if (defaultLaneMatch != Entity.Null)
+                    {
+                        _laneSpecificPrefabEntities[defaultLaneKey] = defaultLaneMatch;
+                        Mod.log.Info(
+                            $"Selected default lane track prefab '{DescribePrefab(defaultLaneMatch)}' for highway type '{highwayType}' with {defaultLaneCount} lanes.");
+                        return defaultLaneMatch;
+                    }
+                }
+            }
+
+            if (lanes > 0)
+            {
+                var laneKey = $"track:{highwayType}:{lanes}";
+                if (_laneSpecificPrefabEntities.TryGetValue(laneKey, out var laneCached))
+                    return laneCached;
+
+                var laneMatch = TryFindPrefabForHighwayType(highwayType, lanes, false, IsSuitableRoadPrefabName, preferredNames, candidates);
+                if (laneMatch != Entity.Null)
+                {
+                    _laneSpecificPrefabEntities[laneKey] = laneMatch;
+                    Mod.log.Info(
+                        $"Selected track prefab '{DescribePrefab(laneMatch)}' for highway type '{highwayType}' with {lanes} lanes.");
+                    return laneMatch;
+                }
+
+                Mod.log.Info(
+                    $"No lane-specific track prefab match for highway type '{highwayType}' with {lanes} lanes. " +
+                    "Falling back to type-only track selection.");
+            }
+
+            var typeKey = $"track:{highwayType}";
+            if (_laneSpecificPrefabEntities.TryGetValue(typeKey, out var cachedType))
+                return cachedType;
+
+            var typeMatch = TryFindPrefabForHighwayType(highwayType, 0, false, IsSuitableRoadPrefabName, preferredNames, candidates);
+            if (typeMatch != Entity.Null)
+            {
+                _laneSpecificPrefabEntities[typeKey] = typeMatch;
+                Mod.log.Info($"Selected track prefab '{DescribePrefab(typeMatch)}' for highway type '{highwayType}'.");
+                return typeMatch;
+            }
+
+            return Entity.Null;
+        }
+
         private Entity TryFindPrefabForHighwayType(
             string highwayType,
             int lanes,
-            Func<string, string, bool> isSuitablePrefabName,
-            IEnumerable<string> preferredNames)
+            bool requiresSidewalk,
+            Func<string, string, bool, bool> isSuitablePrefabName,
+            IEnumerable<string> preferredNames,
+            List<NetPrefab> candidates)
         {
-            var candidates = GetRoadPrefabCandidates().ToList();
-
             foreach (var preferredName in preferredNames)
             {
                     var match = candidates.FirstOrDefault(p =>
-                        isSuitablePrefabName(p.name, highwayType) &&
+                        isSuitablePrefabName(p.name, highwayType, requiresSidewalk) &&
                         p.name.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0 &&
                         (lanes <= 0 || ParsePrefabLaneCount(p.name) == lanes || ParsePrefabLaneCount(p.name) == 0));
                 if (match != null && _prefabSystem.TryGetEntity(match, out var entity))
@@ -1557,6 +1684,584 @@ namespace cs2_osm_importer
             }
 
             return Entity.Null;
+        }
+
+        private bool TryGetManualPrefabForWay(OsmWay way, out Entity prefabEntity)
+        {
+            prefabEntity = Entity.Null;
+
+            EnsurePrefabRulesLoaded();
+            var rulesByType = DefaultPrefabRulesByRoadType;
+            if (way == null || rulesByType == null || rulesByType.Count == 0)
+                return false;
+
+            if (!rulesByType.TryGetValue(way.Highway ?? string.Empty, out var rules) || rules == null || rules.Count == 0)
+                return false;
+
+            var roadCandidates = (IsTrackLikeHighwayType(way.Highway)
+                ? GetTrackPrefabCandidates()
+                : IsPathLikeHighwayType(way.Highway)
+                    ? GetPathPrefabCandidates()
+                    : GetRoadPrefabCandidates())
+                .Where(p => p != null)
+                .ToList();
+
+            PrefabSelectionRule bestRule = null;
+            var bestRuleScore = -1;
+            foreach (var rule in rules)
+            {
+                if (!rule.Matches(way))
+                    continue;
+
+                var score = rule.SpecificityScore();
+                if (score > bestRuleScore)
+                {
+                    bestRule = rule;
+                    bestRuleScore = score;
+                }
+            }
+
+            if (bestRule != null)
+            {
+                if (TryResolveRulePrefab(bestRule.PrefabName, roadCandidates, out prefabEntity))
+                {
+                    Mod.log.Info($"Selected manual prefab '{DescribePrefab(prefabEntity)}' for highway type '{way.Highway}'.");
+                    return true;
+                }
+
+                Mod.log.Warn($"Manual prefab rule for highway type '{way.Highway}' matched but prefab '{bestRule.PrefabName}' was not found among usable candidates.");
+            }
+
+            return false;
+        }
+
+        private bool HasManualPrefabRulesForWay(OsmWay way)
+        {
+            EnsurePrefabRulesLoaded();
+            if (way == null)
+                return false;
+
+            return DefaultPrefabRulesByRoadType.TryGetValue(way.Highway ?? string.Empty, out var rules) && rules != null && rules.Count > 0;
+        }
+
+        private bool TryResolveRulePrefab(string prefabName, List<NetPrefab> candidates, out Entity prefabEntity)
+        {
+            prefabEntity = Entity.Null;
+
+            if (string.IsNullOrWhiteSpace(prefabName) || candidates == null || candidates.Count == 0 || _prefabSystem == null)
+                return false;
+
+            var match = candidates.FirstOrDefault(p => p != null && p.name.Equals(prefabName, StringComparison.OrdinalIgnoreCase));
+
+            return match != null && _prefabSystem.TryGetEntity(match, out prefabEntity);
+        }
+
+        private static PrefabLaneBucket ParseLaneBucket(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "1": return PrefabLaneBucket.One;
+                case "2": return PrefabLaneBucket.Two;
+                case "3": return PrefabLaneBucket.Three;
+                case "4": return PrefabLaneBucket.Four;
+                case "5": return PrefabLaneBucket.Five;
+                case "6": return PrefabLaneBucket.Six;
+                case "7+":
+                case "7plus":
+                case "7 plus":
+                case "7_or_more":
+                case "7 or more":
+                    return PrefabLaneBucket.SevenPlus;
+                case "6+":
+                case "6plus":
+                case "6 plus":
+                case "6_or_more":
+                case "6 or more":
+                    return PrefabLaneBucket.Six;
+                default:
+                    return PrefabLaneBucket.Any;
+            }
+        }
+
+        private static PrefabSidewalkBucket ParseSidewalkBucket(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "none": return PrefabSidewalkBucket.None;
+                case "sidewalk":
+                case "yes":
+                    return PrefabSidewalkBucket.Sidewalk;
+                case "wide":
+                case "wide sidewalk":
+                case "wide_sidewalk":
+                    return PrefabSidewalkBucket.WideSidewalk;
+                default:
+                    return PrefabSidewalkBucket.Any;
+            }
+        }
+
+        private static PrefabParkingSideBucket ParseParkingSideBucket(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "none":
+                    return PrefabParkingSideBucket.None;
+                case "left":
+                    return PrefabParkingSideBucket.Left;
+                case "right":
+                    return PrefabParkingSideBucket.Right;
+                case "both":
+                    return PrefabParkingSideBucket.Both;
+                default:
+                    return PrefabParkingSideBucket.Any;
+            }
+        }
+
+        private static PrefabParkingStyleBucket ParseParkingStyleBucket(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "none":
+                    return PrefabParkingStyleBucket.None;
+                case "parallel":
+                    return PrefabParkingStyleBucket.Parallel;
+                case "diagonal":
+                    return PrefabParkingStyleBucket.Diagonal;
+                case "perpendicular":
+                    return PrefabParkingStyleBucket.Perpendicular;
+                default:
+                    return PrefabParkingStyleBucket.Any;
+            }
+        }
+
+        private static TriState ParseTriState(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "yes":
+                case "true":
+                case "1":
+                    return TriState.Yes;
+                case "no":
+                case "false":
+                case "0":
+                    return TriState.No;
+                default:
+                    return TriState.Any;
+            }
+        }
+
+        internal enum TriState
+        {
+            Any = 0,
+            No = 1,
+            Yes = 2,
+        }
+
+        internal enum OneWayBucket
+        {
+            Any = 0,
+            No = 1,
+            AnyOneWay = 2,
+            Forward = 3,
+            Backward = 4,
+        }
+
+        internal enum PrefabLaneBucket
+        {
+            Any = 0,
+            One = 1,
+            Two = 2,
+            Three = 3,
+            Four = 4,
+            Five = 5,
+            Six = 6,
+            SevenPlus = 7,
+        }
+
+        internal enum PrefabSidewalkBucket
+        {
+            Any = -1,
+            None = 0,
+            Sidewalk = 1,
+            WideSidewalk = 2,
+        }
+
+        internal enum PrefabParkingSideBucket
+        {
+            Any = 0,
+            None = 1,
+            Left = 2,
+            Right = 3,
+            Both = 4,
+        }
+
+        internal enum PrefabParkingStyleBucket
+        {
+            Any = 0,
+            None = 1,
+            Parallel = 2,
+            Diagonal = 3,
+            Perpendicular = 4,
+        }
+
+        internal sealed class PrefabSelectionRule
+        {
+            public PrefabLaneBucket LaneBucket { get; set; }
+
+            public PrefabLaneBucket ForwardLaneBucket { get; set; }
+
+            public PrefabLaneBucket BackwardLaneBucket { get; set; }
+
+            public PrefabLaneBucket BothWaysLaneBucket { get; set; }
+
+            public PrefabSidewalkBucket Sidewalk { get; set; }
+
+            public PrefabParkingSideBucket ParkingSide { get; set; }
+
+            public PrefabParkingStyleBucket ParkingStyle { get; set; }
+
+            public TriState Bridge { get; set; }
+
+            public TriState Tunnel { get; set; }
+
+            public OneWayBucket OneWay { get; set; }
+
+            public string PrefabName { get; set; } = string.Empty;
+
+            public bool Matches(OsmWay way)
+            {
+                if (way == null)
+                    return false;
+
+                return MatchesLane(way.Lanes) &&
+                       MatchesLaneBucket(ForwardLaneBucket, way.LanesForward) &&
+                       MatchesLaneBucket(BackwardLaneBucket, way.LanesBackward) &&
+                       MatchesLaneBucket(BothWaysLaneBucket, way.LanesBothWays) &&
+                       MatchesSidewalk(way.Sidewalk) &&
+                       MatchesParkingSide(way.ParkingSide) &&
+                       MatchesParkingStyle(way.ParkingStyle) &&
+                       MatchesTriState(Bridge, way.IsBridge) &&
+                       MatchesTriState(Tunnel, way.IsTunnel) &&
+                        MatchesOneWay(OneWay, way.OneWayDirection);
+            }
+
+            private bool MatchesLane(int lanes)
+            {
+                return LaneBucket == PrefabLaneBucket.Any ||
+                        (LaneBucket == PrefabLaneBucket.Six && lanes == 6) ||
+                        (LaneBucket == PrefabLaneBucket.SevenPlus && lanes >= 7) ||
+                        (LaneBucket == PrefabLaneBucket.One && lanes == 1) ||
+                        (LaneBucket == PrefabLaneBucket.Two && lanes == 2) ||
+                        (LaneBucket == PrefabLaneBucket.Three && lanes == 3) ||
+                        (LaneBucket == PrefabLaneBucket.Four && lanes == 4) ||
+                        (LaneBucket == PrefabLaneBucket.Five && lanes == 5);
+            }
+
+            private static bool MatchesLaneBucket(PrefabLaneBucket expected, int lanes)
+            {
+                return expected == PrefabLaneBucket.Any ||
+                       (expected == PrefabLaneBucket.Six && lanes == 6) ||
+                       (expected == PrefabLaneBucket.SevenPlus && lanes >= 7) ||
+                       (expected == PrefabLaneBucket.One && lanes == 1) ||
+                       (expected == PrefabLaneBucket.Two && lanes == 2) ||
+                       (expected == PrefabLaneBucket.Three && lanes == 3) ||
+                       (expected == PrefabLaneBucket.Four && lanes == 4) ||
+                       (expected == PrefabLaneBucket.Five && lanes == 5);
+            }
+
+            public int SpecificityScore()
+            {
+                var score = 0;
+                if (LaneBucket != PrefabLaneBucket.Any) score++;
+                if (ForwardLaneBucket != PrefabLaneBucket.Any) score++;
+                if (BackwardLaneBucket != PrefabLaneBucket.Any) score++;
+                if (BothWaysLaneBucket != PrefabLaneBucket.Any) score++;
+                if (Sidewalk != PrefabSidewalkBucket.Any) score++;
+                if (ParkingSide != PrefabParkingSideBucket.Any) score++;
+                if (ParkingStyle != PrefabParkingStyleBucket.Any) score++;
+                if (Bridge != TriState.Any) score++;
+                if (Tunnel != TriState.Any) score++;
+                if (OneWay != OneWayBucket.Any) score++;
+                return score;
+            }
+
+            private bool MatchesSidewalk(OsmSidewalkType sidewalk)
+            {
+                return Sidewalk == PrefabSidewalkBucket.Any || (int)Sidewalk == (int)sidewalk;
+            }
+
+            private bool MatchesParkingSide(OsmParkingSideType parkingSide)
+            {
+                return ParkingSide == PrefabParkingSideBucket.Any || (int)ParkingSide == (int)parkingSide;
+            }
+
+            private bool MatchesParkingStyle(OsmParkingStyleType parkingStyle)
+            {
+                return ParkingStyle == PrefabParkingStyleBucket.Any || (int)ParkingStyle == (int)parkingStyle;
+            }
+
+            private static bool MatchesTriState(TriState expected, bool actual)
+            {
+                return expected == TriState.Any || (expected == TriState.Yes && actual) || (expected == TriState.No && !actual);
+            }
+
+            private static bool MatchesOneWay(OneWayBucket expected, int direction)
+            {
+                return expected == OneWayBucket.Any ||
+                       (expected == OneWayBucket.No && direction == 0) ||
+                       (expected == OneWayBucket.AnyOneWay && direction != 0) ||
+                       (expected == OneWayBucket.Forward && direction > 0) ||
+                       (expected == OneWayBucket.Backward && direction < 0);
+            }
+        }
+
+        private static OneWayBucket ParseOneWayBucket(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "yes":
+                case "true":
+                case "1":
+                case "any-oneway":
+                case "oneway":
+                    return OneWayBucket.AnyOneWay;
+                case "no":
+                case "false":
+                case "0":
+                case "none":
+                    return OneWayBucket.No;
+                case "forward":
+                case "fwd":
+                    return OneWayBucket.Forward;
+                case "backward":
+                case "reverse":
+                case "rev":
+                case "-1":
+                    return OneWayBucket.Backward;
+                default:
+                    return OneWayBucket.Any;
+            }
+        }
+
+        private static void EnsurePrefabRulesLoaded()
+        {
+            if (_prefabRulesLoaded)
+                return;
+
+            lock (_prefabRulesLock)
+            {
+                if (_prefabRulesLoaded)
+                    return;
+
+                try
+                {
+                    LoadPrefabRulesFromJson();
+                }
+                catch (Exception ex)
+                {
+                    Mod.log.Warn($"Failed to load prefab mapping JSON: {ex.Message}");
+                }
+
+                _prefabRulesLoaded = true;
+            }
+        }
+
+        private static void LoadPrefabRulesFromJson()
+        {
+            var path = GetPrefabRulesFilePath();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                Mod.log.Warn($"Prefab mapping JSON not found at '{path}'. Using empty mappings.");
+                return;
+            }
+
+            PrefabMappingsRoot root;
+            try
+            {
+                using (var stream = File.OpenRead(path))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(PrefabMappingsRoot));
+                    root = serializer.ReadObject(stream) as PrefabMappingsRoot;
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Warn($"Prefab mapping JSON at '{path}' could not be parsed: {ex.Message}");
+                return;
+            }
+
+            if (root == null)
+            {
+                Mod.log.Warn($"Prefab mapping JSON at '{path}' was not a valid mapping root object.");
+                return;
+            }
+
+            if (root.RoadTypes != null)
+            {
+                ApplyPrefabRulesDictionary(root.RoadTypes);
+                return;
+            }
+
+            if (root.RoadTypeGroups != null)
+            {
+                ApplyPrefabRulesGroups(root.RoadTypeGroups);
+                return;
+            }
+        }
+
+        private static void ApplyPrefabRulesGroups(List<PrefabRoadTypeGroup> roadTypeGroups)
+        {
+            foreach (var key in DefaultPrefabRulesByRoadType.Keys.ToList())
+                DefaultPrefabRulesByRoadType[key].Clear();
+
+            if (roadTypeGroups == null)
+                return;
+
+            foreach (var group in roadTypeGroups)
+            {
+                if (group == null || group.RoadTypes == null || group.Rules == null)
+                    continue;
+
+                var rules = ParsePrefabRules(group.Rules.Cast<object>());
+                if (rules.Count == 0 || group.RoadTypes.Count == 0)
+                    continue;
+
+                foreach (var roadType in group.RoadTypes)
+                {
+                    if (string.IsNullOrWhiteSpace(roadType))
+                        continue;
+
+                    if (!DefaultPrefabRulesByRoadType.TryGetValue(roadType, out var list))
+                    {
+                        list = new List<PrefabSelectionRule>();
+                        DefaultPrefabRulesByRoadType[roadType] = list;
+                    }
+
+                    list.Clear();
+                    list.AddRange(rules);
+                }
+            }
+        }
+
+        private static void ApplyPrefabRulesDictionary(Dictionary<string, List<PrefabRuleData>> roadTypes)
+        {
+            foreach (var key in DefaultPrefabRulesByRoadType.Keys.ToList())
+                DefaultPrefabRulesByRoadType[key].Clear();
+
+            foreach (var pair in roadTypes)
+            {
+                var roadType = pair.Key ?? string.Empty;
+                var rules = ParsePrefabRules(pair.Value.Cast<object>());
+                if (!DefaultPrefabRulesByRoadType.TryGetValue(roadType, out var list))
+                {
+                    list = new List<PrefabSelectionRule>();
+                    DefaultPrefabRulesByRoadType[roadType] = list;
+                }
+
+                list.Clear();
+                list.AddRange(rules);
+            }
+        }
+
+        private static List<PrefabSelectionRule> ParsePrefabRules(System.Collections.IEnumerable value)
+        {
+            var rules = new List<PrefabSelectionRule>();
+            if (value == null)
+                return rules;
+
+            foreach (var item in value)
+            {
+                var dict = item as PrefabRuleData;
+                if (dict == null)
+                    continue;
+
+                var prefabName = dict.Prefab ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(prefabName))
+                    continue;
+
+                rules.Add(new PrefabSelectionRule
+                {
+                    LaneBucket = ParseLaneBucket(dict.Lane),
+                    ForwardLaneBucket = ParseLaneBucket(dict.LanesForward),
+                    BackwardLaneBucket = ParseLaneBucket(dict.LanesBackward),
+                    BothWaysLaneBucket = ParseLaneBucket(dict.LanesBothWays),
+                    Sidewalk = ParseSidewalkBucket(dict.Sidewalk),
+                    ParkingSide = ParseParkingSideBucket(dict.ParkingSide),
+                    ParkingStyle = ParseParkingStyleBucket(dict.ParkingStyle),
+                    Bridge = ParseTriState(dict.Bridge),
+                    Tunnel = ParseTriState(dict.Tunnel),
+                    OneWay = ParseOneWayBucket(dict.OneWay),
+                    PrefabName = prefabName,
+                });
+            }
+
+            return rules;
+        }
+
+        [DataContract]
+        private sealed class PrefabMappingsRoot
+        {
+            [DataMember(Name = "roadTypes")]
+            public Dictionary<string, List<PrefabRuleData>> RoadTypes { get; set; }
+
+            [DataMember(Name = "roadTypeGroups")]
+            public List<PrefabRoadTypeGroup> RoadTypeGroups { get; set; }
+        }
+
+        [DataContract]
+        private sealed class PrefabRoadTypeGroup
+        {
+            [DataMember(Name = "roadTypes")]
+            public List<string> RoadTypes { get; set; }
+
+            [DataMember(Name = "rules")]
+            public List<PrefabRuleData> Rules { get; set; }
+        }
+
+        [DataContract]
+        private sealed class PrefabRuleData
+        {
+            [DataMember(Name = "lane")]
+            public string Lane { get; set; }
+
+            [DataMember(Name = "lanesForward")]
+            public string LanesForward { get; set; }
+
+            [DataMember(Name = "lanesBackward")]
+            public string LanesBackward { get; set; }
+
+            [DataMember(Name = "lanesBothWays")]
+            public string LanesBothWays { get; set; }
+
+            [DataMember(Name = "sidewalk")]
+            public string Sidewalk { get; set; }
+
+            [DataMember(Name = "parkingSide")]
+            public string ParkingSide { get; set; }
+
+            [DataMember(Name = "parkingStyle")]
+            public string ParkingStyle { get; set; }
+
+            [DataMember(Name = "bridge")]
+            public string Bridge { get; set; }
+
+            [DataMember(Name = "tunnel")]
+            public string Tunnel { get; set; }
+
+            [DataMember(Name = "oneway")]
+            public string OneWay { get; set; }
+
+            [DataMember(Name = "prefab")]
+            public string Prefab { get; set; }
+        }
+
+        private static string GetPrefabRulesFilePath()
+        {
+            if (!string.IsNullOrWhiteSpace(Mod.ModDirectory))
+                return Path.Combine(Mod.ModDirectory, "prefab-mappings.json");
+
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? string.Empty, "prefab-mappings.json");
         }
 
         private static int ParsePrefabLaneCount(string prefabName)
@@ -1617,17 +2322,58 @@ namespace cs2_osm_importer
 
             using var query = EntityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<RoadData>(),
                 ComponentType.ReadOnly<NetData>());
 
             using var prefabs = query.ToEntityArray(Allocator.Temp);
             return prefabs
+                // DLC-gated road prefabs must never be auto-selected for OSM generation.
+                .Where(e => !IsDlcGatedPrefab(e))
                 .Select(e => _prefabSystem.GetPrefab<NetPrefab>(e))
                 .Where(p => p != null)
                 .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
-        private static string[] GetPreferredPrefabNames(string highwayType)
+        private IEnumerable<NetPrefab> GetPathPrefabCandidates()
+        {
+            if (_prefabSystem == null)
+                return Enumerable.Empty<NetPrefab>();
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetData>());
+
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+            return prefabs
+                // DLC-gated prefabs must never be auto-selected for OSM generation.
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => _prefabSystem.GetPrefab<NetPrefab>(e))
+                .Where(p => p != null)
+                .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private IEnumerable<NetPrefab> GetTrackPrefabCandidates()
+        {
+            if (_prefabSystem == null)
+                return Enumerable.Empty<NetPrefab>();
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetData>());
+
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+            return prefabs
+                // DLC-gated prefabs must never be auto-selected for OSM generation.
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => _prefabSystem.GetPrefab<NetPrefab>(e))
+                .Where(p => p != null)
+                .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static string[] GetPreferredPrefabNames(string highwayType, int lanes, bool requiresSidewalk)
         {
             switch (highwayType.ToLowerInvariant())
             {
@@ -1704,7 +2450,7 @@ namespace cs2_osm_importer
             }
         }
 
-        private static bool IsSuitableRoadPrefabName(string prefabName, string highwayType)
+        private static bool IsSuitableRoadPrefabName(string prefabName, string highwayType, bool requiresSidewalk)
         {
             if (string.IsNullOrWhiteSpace(prefabName))
                 return false;
@@ -1738,6 +2484,15 @@ namespace cs2_osm_importer
             if (!(highwayType is "rail" or "monorail" or "light_rail" or "subway" or "tram") && lower.Contains("track"))
                 return false;
 
+            if (requiresSidewalk && lower.Contains("alley"))
+                return false;
+
+            if (!(highwayType is "footway" or "bridleway" or "cycleway" or "pedestrian") &&
+                (lower.Contains("pedestrianstreet") || lower.Contains("pedestrian street")))
+            {
+                return false;
+            }
+
             // Path prefabs are suitable for pedestrian/cycle types
             if (!(highwayType is "footway" or "bridleway" or "cycleway" or "pedestrian") && lower.Contains("path"))
                 return false;
@@ -1751,10 +2506,39 @@ namespace cs2_osm_importer
             return true;
         }
 
-        private static bool IsSuitableRoadPrefabName(string prefabName) =>
-            IsSuitableRoadPrefabName(prefabName, string.Empty);
+        private bool IsDlcGatedPrefab(Entity prefabEntity)
+        {
+            if (prefabEntity == Entity.Null || !EntityManager.Exists(prefabEntity))
+                return false;
 
-        private static bool IsSuitablePathPrefabName(string prefabName, string highwayType)
+            // Any prefab with ContentPrerequisiteData is DLC/mod-gated and must not be auto-selected.
+            if (EntityManager.HasComponent<ContentPrerequisiteData>(prefabEntity))
+                return true;
+
+            if (_prefabSystem != null && _prefabSystem.TryGetPrefab<NetPrefab>(prefabEntity, out var prefab) && prefab != null)
+                return IsKnownDlcRoadName(prefab.name);
+
+            return false;
+        }
+
+        private static bool IsKnownDlcRoadName(string prefabName)
+        {
+            if (string.IsNullOrWhiteSpace(prefabName))
+                return false;
+
+            var lower = prefabName.ToLowerInvariant();
+            return lower.Contains("port gate") ||
+                   lower.Contains("bridgesandports") ||
+                   lower.Contains("bridges and ports");
+        }
+
+        private static bool IsSuitableRoadPrefabName(string prefabName) =>
+            IsSuitableRoadPrefabName(prefabName, string.Empty, false);
+
+        private static string GetRoadPrefabCacheKey(string highwayType, int lanes, OsmSidewalkType sidewalk)
+            => $"{highwayType}:{lanes}:{(int)sidewalk}";
+
+        private static bool IsSuitablePathPrefabName(string prefabName, string highwayType, bool requiresSidewalk)
         {
             if (string.IsNullOrWhiteSpace(prefabName))
                 return false;
@@ -1787,6 +2571,9 @@ namespace cs2_osm_importer
             };
         }
 
+        private static bool IsSuitablePathPrefabName(string prefabName, string highwayType) =>
+            IsSuitablePathPrefabName(prefabName, highwayType, false);
+
         private static bool IsPathLikeHighwayType(string highwayType)
         {
             switch ((highwayType ?? string.Empty).ToLowerInvariant())
@@ -1795,6 +2582,21 @@ namespace cs2_osm_importer
                 case "pedestrian":
                 case "bridleway":
                 case "cycleway":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsTrackLikeHighwayType(string highwayType)
+        {
+            switch ((highwayType ?? string.Empty).ToLowerInvariant())
+            {
+                case "monorail":
+                case "rail":
+                case "subway":
+                case "light_rail":
+                case "tram":
                     return true;
                 default:
                     return false;
@@ -1853,6 +2655,45 @@ namespace cs2_osm_importer
                 return prefab.name;
 
             return $"{prefabEntity.Index}:{prefabEntity.Version}";
+        }
+
+        private void LogPrefabCatalogOnce()
+        {
+            if (_loggedPrefabCatalog || _prefabSystem == null)
+                return;
+
+            using var query = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>());
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+
+            if (prefabs.Length == 0)
+                return;
+
+            var entries = new List<string>(prefabs.Length);
+            foreach (var entity in prefabs)
+            {
+                var name = EntityManager.GetName(entity);
+                if (string.IsNullOrWhiteSpace(name) && _prefabSystem.TryGetPrefab<NetPrefab>(entity, out var netPrefab) && netPrefab != null)
+                    name = netPrefab.name;
+
+                if (string.IsNullOrWhiteSpace(name))
+                    name = $"{entity.Index}:{entity.Version}";
+
+                using var componentTypes = EntityManager.GetComponentTypes(entity, Allocator.Temp);
+                var typeNames = componentTypes.Length == 0
+                    ? string.Empty
+                    : string.Join(", ", componentTypes.Select(t => t.ToString()));
+
+                entries.Add(string.IsNullOrWhiteSpace(typeNames)
+                    ? name
+                    : $"{name} [{typeNames}]");
+            }
+
+            entries.Sort(StringComparer.OrdinalIgnoreCase);
+            Mod.log.Info($"Prefab catalog dump ({entries.Count} prefabs):");
+            foreach (var entry in entries)
+                Mod.log.Info($"  {entry}");
+
+            _loggedPrefabCatalog = true;
         }
 
         private List<string> BuildGenerationTypeOrder()
@@ -1931,6 +2772,8 @@ namespace cs2_osm_importer
                 ComponentType.ReadOnly<NetData>()).ToEntityArray(Allocator.Temp);
 
             var candidates = entities
+                // Never allow DLC-gated road prefabs here; they break generation for players without the DLC.
+                .Where(e => !IsDlcGatedPrefab(e))
                 .Select(e => _prefabSystem.GetPrefab<NetPrefab>(e))
                 .Where(p => p != null && IsSuitableRoadPrefabName(p.name))
                 .ToList();

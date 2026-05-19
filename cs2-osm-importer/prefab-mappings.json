@@ -1,0 +1,1514 @@
+{
+  "schema": 2,
+  "roadTypeGroups": [
+    {
+      "roadTypes": [
+        "motorway"
+      ],
+      "rules": [
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Twoway - 2 lanes"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 2 lanes"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 3 lanes"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Twoway - 4 lanes"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 4 lanes"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Divided"
+        },
+        {
+          "lane": "6",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Divided"
+        },
+        {
+          "lane": "7+",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Oneway - 7 lanes"
+        },
+        {
+          "lane": "3",
+          "lanesForward": "2",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway - 3 lanes"
+        },
+        {
+          "lane": "4",
+          "lanesForward": "3",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 1+3 lanes"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "4",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "3",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "5",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "4",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+4 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "6",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+5 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "5",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+5 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "4",
+          "lanesBackward": "3",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "trunk",
+        "primary",
+        "secondary",
+        "tertiary",
+        "unclassified",
+        "road",
+        "residential",
+        "living_street"
+      ],
+      "rules": [
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Alley"
+        },
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Alley Oneway"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Alley"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 2 lanes"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 3 lanes"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Twoway - 4 lanes"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Medium Road"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 4 lanes"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Divided"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Divided"
+        },
+        {
+          "lane": "6",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Oneway"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Asymmetric"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Asymmetric"
+        },
+        {
+          "lane": "7+",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Large Road Oneway - 7 lanes"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - 1 lane"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - 1 lane"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - 1 lane"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - Single Sided Parking Angled"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - Single Sided Parking Angled"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Alley Oneway - Double Sided Parking Angled"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - Single Sided Parking"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Oneway - Single Sided Parking"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Alley Oneway - Double Sided Parking"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking Angled"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking Angled"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking Angled"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road - Double Sided Parking"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking Angled"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking Angled"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking Angled"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Small Road Divided - Double Sided Parking"
+        },
+        {
+          "lane": "3",
+          "lanesForward": "2",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Small Road Asymmetric"
+        },
+        {
+          "lane": "4",
+          "lanesForward": "3",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 1+3 lanes"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "4",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "3",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "5",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Highway Twoway Asymmetric - 2+3 lanes"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "4",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+4 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "6",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+5 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "5",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric - 2+5 lanes"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "4",
+          "lanesBackward": "3",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Large Road Asymmetric"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "service"
+      ],
+      "rules": [
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street Small"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "6",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "3",
+          "lanesForward": "2",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "4",
+          "lanesForward": "3",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "4",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "3",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "5",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "4",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "6",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "5",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "4",
+          "lanesBackward": "3",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Pedestrian Street"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "track"
+      ],
+      "rules": [
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "4",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "6",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "6",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "7+",
+          "oneway": "no",
+          "sidewalk": "sidewalk",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "7+",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Gravel Road Oneway"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "1",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "2",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "parallel",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "diagonal",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "left",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "right",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "parkingSide": "both",
+          "parkingStyle": "perpendicular",
+          "scenarioGroup": "parking",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "3",
+          "lanesForward": "2",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "4",
+          "lanesForward": "3",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "4",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "5",
+          "lanesForward": "3",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "5",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "6",
+          "lanesForward": "4",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "6",
+          "lanesBackward": "1",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "5",
+          "lanesBackward": "2",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        },
+        {
+          "lane": "7+",
+          "lanesForward": "4",
+          "lanesBackward": "3",
+          "sidewalk": "none",
+          "oneway": "no",
+          "scenarioGroup": "asymmetric",
+          "prefab": "Gravel Road"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "motorway_link",
+        "trunk_link",
+        "primary_link",
+        "secondary_link",
+        "tertiary_link"
+      ],
+      "rules": [
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 1 lane"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 2 lanes"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 3 lanes"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 4 lanes"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        },
+        {
+          "lane": "6",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        },
+        {
+          "lane": "7+",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 5 lanes"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "footway",
+        "bridleway",
+        "pedestrian"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Pavement Path"
+        },
+        {
+          "oneway": "yes",
+          "scenarioGroup": "base",
+          "prefab": "Pavement Path"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "cycleway"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "TwoWayBikePath"
+        },
+        {
+          "oneway": "yes",
+          "scenarioGroup": "base",
+          "prefab": "OneWayBikePath"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "monorail"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Twoway Train Track"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "rail"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Twoway Train Track"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "light_rail"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Twoway Subway Track"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "subway"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Twoway Subway Track"
+        }
+      ]
+    },
+    {
+      "roadTypes": [
+        "tram"
+      ],
+      "rules": [
+        {
+          "oneway": "no",
+          "scenarioGroup": "base",
+          "prefab": "Double Tram Track"
+        }
+      ]
+    }
+  ]
+}

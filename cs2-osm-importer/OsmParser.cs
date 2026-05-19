@@ -14,6 +14,7 @@ namespace cs2_osm_importer
         private const float MaxTerrainSegmentLengthMeters = 15f;
         private const float DefaultInclinePercent = 4f;
         private const float RampLengthMeters = 60f;
+        private const float SidewalkSpatialBucketSizeMeters = 64f;
 
         private sealed class GeoNode
         {
@@ -134,6 +135,10 @@ namespace cs2_osm_importer
                     parsedWays.Add(way);
             }
 
+            parsedWays = AttachSidewalkWays(parsedWays, out var attachedSidewalkCount);
+            if (attachedSidewalkCount > 0)
+                Mod.log.Info($"Attached {attachedSidewalkCount} footway sidewalk segments to eligible roadway segments.");
+
             var mergedWays = MergeSimpleConnectedWays(parsedWays, out var mergedWayCount);
             if (mergedWayCount > 0)
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
@@ -185,6 +190,7 @@ namespace cs2_osm_importer
             var layer = 0;
             var isBridge = false;
             var isTunnel = false;
+            var oneWayDirection = 0;
             var isCovered = false;
             var isEmbankment = false;
             var isCutting = false;
@@ -193,7 +199,15 @@ namespace cs2_osm_importer
             var hasExplicitLaneCount = false;
             var forwardLaneCount = 0;
             var backwardLaneCount = 0;
+            var bothWaysLaneCount = 0;
             var wayRailway = string.Empty;
+            var footwayType = string.Empty;
+            var sidewalkTag = string.Empty;
+            var sidewalkLeft = false;
+            var sidewalkRight = false;
+            var parkingLeftTag = string.Empty;
+            var parkingRightTag = string.Empty;
+            var parkingBothTag = string.Empty;
             var tags = wayElement.SelectNodes("tag");
 
             if (tags != null)
@@ -222,10 +236,24 @@ namespace cs2_osm_importer
                     {
                         backwardLaneCount = parsedBackwardLaneCount;
                     }
+                    else if (key == "lanes:both_ways" && TryReadLaneCount(value, out var parsedBothWaysLaneCount))
+                    {
+                        bothWaysLaneCount = parsedBothWaysLaneCount;
+                    }
                     else if (key == "bridge")
                         isBridge = IsTruthy(value);
                     else if (key == "tunnel")
                         isTunnel = IsTruthy(value);
+                    else if (key == "oneway")
+                    {
+                        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+                        if (normalized == "-1" || normalized == "reverse" || normalized == "backward")
+                            oneWayDirection = -1;
+                        else if (normalized == "0" || normalized == "no" || normalized == "false" || normalized == "off")
+                            oneWayDirection = 0;
+                        else if (IsTruthy(value) || normalized == "yes" || normalized == "true" || normalized == "1" || normalized == "forward" || normalized == "fwd")
+                            oneWayDirection = 1;
+                    }
                     else if (key == "covered")
                         isCovered = IsTruthy(value);
                     else if (key == "embankment")
@@ -243,6 +271,24 @@ namespace cs2_osm_importer
                     }
                     else if (key == "railway")
                         wayRailway = value;
+                    else if (key == "footway")
+                        footwayType = value;
+                    else if (key == "sidewalk")
+                        sidewalkTag = value;
+                    else if (key == "sidewalk:left")
+                        sidewalkLeft = IsTruthy(value) || value.Equals("separate", StringComparison.OrdinalIgnoreCase) || value.Equals("both", StringComparison.OrdinalIgnoreCase);
+                    else if (key == "sidewalk:right")
+                        sidewalkRight = IsTruthy(value) || value.Equals("separate", StringComparison.OrdinalIgnoreCase) || value.Equals("both", StringComparison.OrdinalIgnoreCase);
+                    else if (key == "parking:left" || key == "parking:right" || key == "parking:both" ||
+                             key == "parking:lane:left" || key == "parking:lane:right" || key == "parking:lane:both")
+                    {
+                        if (key.EndsWith(":left", StringComparison.OrdinalIgnoreCase))
+                            parkingLeftTag = value;
+                        else if (key.EndsWith(":right", StringComparison.OrdinalIgnoreCase))
+                            parkingRightTag = value;
+                        else if (key.EndsWith(":both", StringComparison.OrdinalIgnoreCase))
+                            parkingBothTag = value;
+                    }
                     else if (key == "area" && value == "yes")
                         isArea = true;
                 }
@@ -258,9 +304,13 @@ namespace cs2_osm_importer
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
 
-            if (!hasExplicitLaneCount && (forwardLaneCount > 0 || backwardLaneCount > 0))
+            way.LanesForward = forwardLaneCount;
+            way.LanesBackward = backwardLaneCount;
+            way.LanesBothWays = bothWaysLaneCount;
+
+            if (!hasExplicitLaneCount && (forwardLaneCount > 0 || backwardLaneCount > 0 || bothWaysLaneCount > 0))
             {
-                way.Lanes = forwardLaneCount + backwardLaneCount;
+                way.Lanes = forwardLaneCount + backwardLaneCount + bothWaysLaneCount;
                 way.HasExplicitLaneCount = true;
             }
 
@@ -280,6 +330,10 @@ namespace cs2_osm_importer
                 isCutting);
             way.UsesStructuralElevation = ((hasLayer && layer != 0) || isBridge || isTunnel || isCovered || isEmbankment || isCutting) &&
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
+            way.IsBridge = isBridge;
+            way.IsTunnel = isTunnel;
+            way.OneWayDirection = oneWayDirection;
+            way.IsOneWay = oneWayDirection != 0;
 
             if (way.Highway is "monorail" or "light_rail" or "subway" || wayRailway is "monorail" or "light_rail" or "subway")
             {
@@ -291,6 +345,12 @@ namespace cs2_osm_importer
 
             way.InclineDirection = inclineDirection;
             way.InclinePercent = inclinePercent;
+            way.Footway = footwayType;
+            way.SidewalkTag = sidewalkTag;
+            way.Sidewalk = ParseSidewalkType(sidewalkTag, sidewalkLeft, sidewalkRight);
+            ResolveParkingTags(parkingLeftTag, parkingRightTag, parkingBothTag, out var parkingSide, out var parkingStyle);
+            way.ParkingSide = parkingSide;
+            way.ParkingStyle = parkingStyle;
             way.TerrainHeights.Clear();
 
             var nds = wayElement.SelectNodes("nd");
@@ -342,6 +402,493 @@ namespace cs2_osm_importer
             if (sampleHeight == null)
                 Simplify(way.Points, Math.Max(0f, options.SimplifyToleranceMeters * options.ScaleFactor));
             return way.Points.Count >= 2;
+        }
+
+        private static List<OsmWay> AttachSidewalkWays(List<OsmWay> ways, out int attachedCount)
+        {
+            attachedCount = 0;
+
+            if (ways == null || ways.Count == 0)
+                return new List<OsmWay>();
+
+            var roadWays = new List<OsmWay>();
+            var roadBounds = new Dictionary<long, (float MinX, float MinZ, float MaxX, float MaxZ)>();
+            var roadIndex = new Dictionary<string, List<OsmWay>>(StringComparer.Ordinal);
+
+            foreach (var way in ways)
+            {
+                if (!CanReceiveAttachedSidewalks(way))
+                    continue;
+
+                roadWays.Add(way);
+                var bounds = GetWayBounds(way);
+                roadBounds[way.Id] = bounds;
+
+                foreach (var cellKey in GetBucketKeys(bounds.MinX, bounds.MinZ, bounds.MaxX, bounds.MaxZ))
+                {
+                    if (!roadIndex.TryGetValue(cellKey, out var cellWays))
+                    {
+                        cellWays = new List<OsmWay>();
+                        roadIndex[cellKey] = cellWays;
+                    }
+
+                    cellWays.Add(way);
+                }
+            }
+
+            if (roadWays.Count == 0)
+                return ways;
+
+            var attachedFootwayIds = new HashSet<long>();
+            var roadAttachmentCounts = new Dictionary<long, int>();
+
+            var footways = new List<OsmWay>();
+            foreach (var way in ways)
+            {
+                if (IsFootwaySidewalkCandidate(way))
+                    footways.Add(way);
+            }
+
+            footways.Sort((a, b) =>
+            {
+                var aPriority = IsExplicitSidewalkFootway(a) ? 0 : 1;
+                var bPriority = IsExplicitSidewalkFootway(b) ? 0 : 1;
+                var cmp = aPriority.CompareTo(bPriority);
+                if (cmp != 0)
+                    return cmp;
+
+                return GetWayLength(b).CompareTo(GetWayLength(a));
+            });
+
+            foreach (var footway in footways)
+            {
+                if (TryAttachFootwayToRoad(footway, roadIndex, roadBounds, roadAttachmentCounts, out var road))
+                {
+                    attachedFootwayIds.Add(footway.Id);
+                    attachedCount++;
+
+                    if (road != null && road.Sidewalk == OsmSidewalkType.None)
+                        road.Sidewalk = OsmSidewalkType.Sidewalk;
+                }
+            }
+
+            if (attachedFootwayIds.Count == 0)
+                return ways;
+
+            return ways.Where(way => !attachedFootwayIds.Contains(way.Id)).ToList();
+        }
+
+        private static bool TryAttachFootwayToRoad(
+            OsmWay footway,
+            Dictionary<string, List<OsmWay>> roadIndex,
+            Dictionary<long, (float MinX, float MinZ, float MaxX, float MaxZ)> roadBounds,
+            Dictionary<long, int> roadAttachmentCounts,
+            out OsmWay road)
+        {
+            road = null;
+
+            if (footway == null || roadIndex == null || roadIndex.Count == 0 || footway.Points.Count < 2)
+                return false;
+
+            if (!IsExplicitSidewalkFootway(footway) && IsClearlyStandaloneFootway(footway))
+                return false;
+
+            var bestRoad = default(OsmWay);
+            var bestScore = double.MaxValue;
+            var footwayBounds = GetWayBounds(footway);
+            var candidateRoads = GatherNearbyRoads(roadIndex, roadBounds, footwayBounds, footway);
+            var threshold = GetFootwayAttachmentThreshold(footway);
+            var footwayStart = footway.Points[0];
+            var footwayEnd = footway.Points[footway.Points.Count - 1];
+
+            foreach (var candidate in candidateRoads)
+            {
+                var startDistance = DistancePointToPolyline(footwayStart, candidate.Points);
+                var endDistance = DistancePointToPolyline(footwayEnd, candidate.Points);
+                if (startDistance > threshold || endDistance > threshold)
+                    continue;
+
+                var score = ScoreFootwayAttachment(candidate, footway);
+                if (score < 0d || score >= bestScore)
+                    continue;
+
+                bestScore = score;
+                bestRoad = candidate;
+            }
+
+            if (bestRoad == null)
+                return false;
+
+            if (bestScore > threshold)
+                return false;
+
+            road = bestRoad;
+            var attachmentCount = roadAttachmentCounts.TryGetValue(road.Id, out var count) ? count + 1 : 1;
+            roadAttachmentCounts[road.Id] = attachmentCount;
+
+            if (road.Sidewalk == OsmSidewalkType.None)
+                road.Sidewalk = attachmentCount > 1 ? OsmSidewalkType.WideSidewalk : OsmSidewalkType.Sidewalk;
+            else if (road.Sidewalk == OsmSidewalkType.Sidewalk && attachmentCount > 1)
+                road.Sidewalk = OsmSidewalkType.WideSidewalk;
+
+            return true;
+        }
+
+        private static List<OsmWay> GatherNearbyRoads(
+            Dictionary<string, List<OsmWay>> roadIndex,
+            Dictionary<long, (float MinX, float MinZ, float MaxX, float MaxZ)> roadBounds,
+            (float MinX, float MinZ, float MaxX, float MaxZ) footwayBounds,
+            OsmWay footway)
+        {
+            var result = new List<OsmWay>();
+            var seen = new HashSet<long>();
+            var threshold = (float)GetFootwayAttachmentThreshold(footway);
+            var minX = footwayBounds.MinX - threshold;
+            var minZ = footwayBounds.MinZ - threshold;
+            var maxX = footwayBounds.MaxX + threshold;
+            var maxZ = footwayBounds.MaxZ + threshold;
+
+            foreach (var key in GetBucketKeys(minX, minZ, maxX, maxZ))
+            {
+                if (!roadIndex.TryGetValue(key, out var roads))
+                    continue;
+
+                foreach (var road in roads)
+                {
+                    if (road == null || !seen.Add(road.Id))
+                        continue;
+
+                    if (!roadBounds.TryGetValue(road.Id, out var bounds) || !IntersectsExpandedBounds(bounds, footwayBounds, threshold))
+                        continue;
+
+                    result.Add(road);
+                }
+            }
+
+            return result;
+        }
+
+        private static bool IntersectsExpandedBounds((float MinX, float MinZ, float MaxX, float MaxZ) roadBounds, (float MinX, float MinZ, float MaxX, float MaxZ) footwayBounds, float padding)
+        {
+            return roadBounds.MinX <= footwayBounds.MaxX + padding &&
+                   roadBounds.MaxX >= footwayBounds.MinX - padding &&
+                   roadBounds.MinZ <= footwayBounds.MaxZ + padding &&
+                   roadBounds.MaxZ >= footwayBounds.MinZ - padding;
+        }
+
+        private static IEnumerable<string> GetBucketKeys(float minX, float minZ, float maxX, float maxZ)
+        {
+            var minBucketX = (int)Math.Floor(minX / SidewalkSpatialBucketSizeMeters);
+            var maxBucketX = (int)Math.Floor(maxX / SidewalkSpatialBucketSizeMeters);
+            var minBucketZ = (int)Math.Floor(minZ / SidewalkSpatialBucketSizeMeters);
+            var maxBucketZ = (int)Math.Floor(maxZ / SidewalkSpatialBucketSizeMeters);
+
+            for (var x = minBucketX; x <= maxBucketX; x++)
+            {
+                for (var z = minBucketZ; z <= maxBucketZ; z++)
+                    yield return MakeBucketKey(x, z);
+            }
+        }
+
+        private static string MakeBucketKey(int bucketX, int bucketZ) => $"{bucketX}:{bucketZ}";
+
+        private static (float MinX, float MinZ, float MaxX, float MaxZ) GetWayBounds(OsmWay way)
+        {
+            if (way == null || way.Points.Count == 0)
+                return (0f, 0f, 0f, 0f);
+
+            var minX = way.Points[0].x;
+            var maxX = way.Points[0].x;
+            var minZ = way.Points[0].z;
+            var maxZ = way.Points[0].z;
+
+            for (var i = 1; i < way.Points.Count; i++)
+            {
+                var p = way.Points[i];
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.z < minZ) minZ = p.z;
+                if (p.z > maxZ) maxZ = p.z;
+            }
+
+            return (minX, minZ, maxX, maxZ);
+        }
+
+        private static double GetFootwayAttachmentThreshold(OsmWay footway)
+        {
+            return IsExplicitSidewalkFootway(footway) ? 30d : 18d;
+        }
+
+        private static bool IsFootwaySidewalkCandidate(OsmWay way)
+        {
+            if (way == null || !string.Equals(way.Highway, "footway", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return !IsClearlyStandaloneFootway(way);
+        }
+
+        private static bool IsExplicitSidewalkFootway(OsmWay way)
+        {
+            if (way == null)
+                return false;
+
+            return string.Equals(way.Footway, "sidewalk", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(way.SidewalkTag, "sidewalk", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(way.SidewalkTag, "both", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(way.SidewalkTag, "left", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(way.SidewalkTag, "right", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsClearlyStandaloneFootway(OsmWay way)
+        {
+            if (way == null)
+                return true;
+
+            if (!string.Equals(way.Highway, "footway", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            switch ((way.Footway ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "crossing":
+                case "link":
+                case "traffic_island":
+                case "escape":
+                case "path":
+                case "trail":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool CanReceiveAttachedSidewalks(OsmWay way)
+        {
+            if (way == null || string.IsNullOrWhiteSpace(way.Highway))
+                return false;
+
+            switch (way.Highway.ToLowerInvariant())
+            {
+                case "motorway":
+                case "motorway_link":
+                case "trunk":
+                case "trunk_link":
+                case "primary_link":
+                case "secondary_link":
+                case "tertiary_link":
+                case "rail":
+                case "monorail":
+                case "light_rail":
+                case "subway":
+                case "tram":
+                case "track":
+                case "cycleway":
+                case "bridleway":
+                case "footway":
+                case "pedestrian":
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        private static double ScoreFootwayAttachment(OsmWay road, OsmWay footway)
+        {
+            if (road == null || footway == null || road.Points.Count < 2 || footway.Points.Count < 2)
+                return -1d;
+
+            var roadLength = GetWayLength(road);
+            var footwayLength = GetWayLength(footway);
+            if (roadLength <= 0d || footwayLength <= 0d)
+                return -1d;
+
+            var alignment = Math.Abs(GetDirectionDot(road, footway));
+            if (alignment < 0.35d)
+                return -1d;
+
+            var avgDistance = AverageDistanceToPolyline(footway.Points, road.Points);
+            if (double.IsNaN(avgDistance) || double.IsInfinity(avgDistance))
+                return -1d;
+
+            var startDistance = DistancePointToPolyline(footway.Points[0], road.Points);
+            var endDistance = DistancePointToPolyline(footway.Points[footway.Points.Count - 1], road.Points);
+            var endpointPenalty = (startDistance + endDistance) * 0.5d;
+
+            var roadSpan = GetPolylineSpan(road.Points);
+            var footwaySpan = GetPolylineSpan(footway.Points);
+            var spanPenalty = Math.Abs(roadSpan - footwaySpan) * 0.05d;
+            var lengthPenalty = Math.Abs(roadLength - footwayLength) / Math.Max(roadLength, footwayLength) * 6d;
+            var tagBonus = IsExplicitSidewalkFootway(footway) ? -4d : 0d;
+
+            return avgDistance + endpointPenalty + spanPenalty + lengthPenalty - alignment * 2d + tagBonus;
+        }
+
+        private static double GetDirectionDot(OsmWay a, OsmWay b)
+        {
+            var aVector = a.Points[a.Points.Count - 1] - a.Points[0];
+            var bVector = b.Points[b.Points.Count - 1] - b.Points[0];
+            aVector.y = 0f;
+            bVector.y = 0f;
+
+            var aLength = math.length(aVector);
+            var bLength = math.length(bVector);
+            if (aLength <= 0.001f || bLength <= 0.001f)
+                return 0d;
+
+            return math.dot(aVector / aLength, bVector / bLength);
+        }
+
+        private static double AverageDistanceToPolyline(List<float3> source, List<float3> target)
+        {
+            if (source == null || target == null || source.Count == 0 || target.Count == 0)
+                return double.NaN;
+
+            var total = 0d;
+            var count = 0;
+
+            for (var i = 0; i < source.Count; i += Math.Max(1, source.Count / 3))
+            {
+                total += DistancePointToPolyline(source[i], target);
+                count++;
+            }
+
+            if (source.Count > 1)
+            {
+                total += DistancePointToPolyline(source[source.Count - 1], target);
+                count++;
+            }
+
+            return count == 0 ? double.NaN : total / count;
+        }
+
+        private static double DistancePointToPolyline(float3 point, List<float3> polyline)
+        {
+            if (polyline == null || polyline.Count == 0)
+                return double.NaN;
+
+            var best = double.MaxValue;
+            for (var i = 0; i < polyline.Count - 1; i++)
+            {
+                var distance = DistancePointToSegment(point, polyline[i], polyline[i + 1]);
+                if (distance < best)
+                    best = distance;
+            }
+
+            return best;
+        }
+
+        private static double DistancePointToSegment(float3 point, float3 a, float3 b)
+        {
+            var ap = new float2(point.x - a.x, point.z - a.z);
+            var ab = new float2(b.x - a.x, b.z - a.z);
+            var abLengthSq = math.lengthsq(ab);
+            if (abLengthSq <= 0.000001f)
+                return math.length(ap);
+
+            var t = math.clamp(math.dot(ap, ab) / abLengthSq, 0f, 1f);
+            var closest = new float2(a.x, a.z) + ab * t;
+            return math.distance(new float2(point.x, point.z), closest);
+        }
+
+        private static double GetWayLength(OsmWay way)
+        {
+            if (way == null || way.Points.Count < 2)
+                return 0d;
+
+            var length = 0d;
+            for (var i = 1; i < way.Points.Count; i++)
+                length += math.distance(way.Points[i - 1], way.Points[i]);
+
+            return length;
+        }
+
+        private static double GetPolylineSpan(List<float3> points)
+        {
+            if (points == null || points.Count < 2)
+                return 0d;
+
+            return math.distance(points[0], points[points.Count - 1]);
+        }
+
+        private static OsmSidewalkType ParseSidewalkType(string sidewalkTag, bool sidewalkLeft, bool sidewalkRight)
+        {
+            if (string.IsNullOrWhiteSpace(sidewalkTag))
+                return sidewalkLeft && sidewalkRight ? OsmSidewalkType.WideSidewalk :
+                       sidewalkLeft || sidewalkRight ? OsmSidewalkType.Sidewalk : OsmSidewalkType.None;
+
+            switch (sidewalkTag.Trim().ToLowerInvariant())
+            {
+                case "both":
+                    return OsmSidewalkType.WideSidewalk;
+                case "left":
+                case "right":
+                case "yes":
+                case "separate":
+                    return OsmSidewalkType.Sidewalk;
+                case "no":
+                case "none":
+                    return OsmSidewalkType.None;
+                default:
+                    return sidewalkLeft && sidewalkRight ? OsmSidewalkType.WideSidewalk :
+                           sidewalkLeft || sidewalkRight ? OsmSidewalkType.Sidewalk : OsmSidewalkType.None;
+            }
+        }
+
+        private static void ResolveParkingTags(
+            string parkingLeftTag,
+            string parkingRightTag,
+            string parkingBothTag,
+            out OsmParkingSideType parkingSide,
+            out OsmParkingStyleType parkingStyle)
+        {
+            parkingSide = OsmParkingSideType.None;
+            parkingStyle = OsmParkingStyleType.None;
+
+            var bothStyle = ParseParkingStyleType(parkingBothTag);
+            if (bothStyle != OsmParkingStyleType.None)
+            {
+                parkingSide = OsmParkingSideType.Both;
+                parkingStyle = bothStyle;
+                return;
+            }
+
+            var leftStyle = ParseParkingStyleType(parkingLeftTag);
+            var rightStyle = ParseParkingStyleType(parkingRightTag);
+
+            if (leftStyle != OsmParkingStyleType.None && rightStyle != OsmParkingStyleType.None)
+            {
+                parkingSide = OsmParkingSideType.Both;
+                parkingStyle = leftStyle == rightStyle ? leftStyle : leftStyle;
+                return;
+            }
+
+            if (leftStyle != OsmParkingStyleType.None)
+            {
+                parkingSide = OsmParkingSideType.Left;
+                parkingStyle = leftStyle;
+                return;
+            }
+
+            if (rightStyle != OsmParkingStyleType.None)
+            {
+                parkingSide = OsmParkingSideType.Right;
+                parkingStyle = rightStyle;
+                return;
+            }
+        }
+
+        private static OsmParkingStyleType ParseParkingStyleType(string parkingStyleTag)
+        {
+            switch ((parkingStyleTag ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "parallel":
+                    return OsmParkingStyleType.Parallel;
+                case "diagonal":
+                    return OsmParkingStyleType.Diagonal;
+                case "perpendicular":
+                    return OsmParkingStyleType.Perpendicular;
+                default:
+                    return OsmParkingStyleType.None;
+            }
         }
 
         private static List<OsmWay> MergeSimpleConnectedWays(List<OsmWay> ways, out int mergedWayCount)
@@ -571,12 +1118,24 @@ namespace cs2_osm_importer
                 Name = way.Name,
                 Ref = way.Ref,
                 Highway = way.Highway,
+                Footway = way.Footway,
+                SidewalkTag = way.SidewalkTag,
                 Lanes = way.Lanes,
+                LanesForward = way.LanesForward,
+                LanesBackward = way.LanesBackward,
+                LanesBothWays = way.LanesBothWays,
                 HasExplicitLaneCount = way.HasExplicitLaneCount,
                 UsesStructuralElevation = way.UsesStructuralElevation,
+                IsBridge = way.IsBridge,
+                IsTunnel = way.IsTunnel,
+                IsOneWay = way.IsOneWay,
+                OneWayDirection = way.OneWayDirection,
                 BaseElevationOffsetMeters = way.BaseElevationOffsetMeters,
                 InclineDirection = way.InclineDirection,
-                InclinePercent = way.InclinePercent
+                InclinePercent = way.InclinePercent,
+                Sidewalk = way.Sidewalk,
+                ParkingSide = way.ParkingSide,
+                ParkingStyle = way.ParkingStyle
             };
 
             if (reversed)
@@ -612,12 +1171,24 @@ namespace cs2_osm_importer
                 Name = ways[0].Name,
                 Ref = ways[0].Ref,
                 Highway = ways[0].Highway,
+                Footway = ways[0].Footway,
+                SidewalkTag = ways[0].SidewalkTag,
                 Lanes = ways[0].Lanes,
+                LanesForward = ways[0].LanesForward,
+                LanesBackward = ways[0].LanesBackward,
+                LanesBothWays = ways[0].LanesBothWays,
                 HasExplicitLaneCount = ways[0].HasExplicitLaneCount,
                 UsesStructuralElevation = ways[0].UsesStructuralElevation,
+                IsBridge = ways[0].IsBridge,
+                IsTunnel = ways[0].IsTunnel,
+                IsOneWay = ways[0].IsOneWay,
+                OneWayDirection = ways[0].OneWayDirection,
                 BaseElevationOffsetMeters = ways[0].BaseElevationOffsetMeters,
                 InclineDirection = ways[0].InclineDirection,
-                InclinePercent = ways[0].InclinePercent
+                InclinePercent = ways[0].InclinePercent,
+                Sidewalk = ways[0].Sidewalk,
+                ParkingSide = ways[0].ParkingSide,
+                ParkingStyle = ways[0].ParkingStyle
             };
 
             if (merged.Lanes <= 0)
@@ -631,6 +1202,54 @@ namespace cs2_osm_importer
                     merged.HasExplicitLaneCount |= way.HasExplicitLaneCount;
                     break;
                 }
+            }
+
+            if (merged.LanesForward <= 0)
+            {
+                foreach (var way in ways)
+                {
+                    if (way.LanesForward <= 0)
+                        continue;
+
+                    merged.LanesForward = way.LanesForward;
+                    break;
+                }
+            }
+
+            if (merged.LanesBackward <= 0)
+            {
+                foreach (var way in ways)
+                {
+                    if (way.LanesBackward <= 0)
+                        continue;
+
+                    merged.LanesBackward = way.LanesBackward;
+                    break;
+                }
+            }
+
+            if (merged.LanesBothWays <= 0)
+            {
+                foreach (var way in ways)
+                {
+                    if (way.LanesBothWays <= 0)
+                        continue;
+
+                    merged.LanesBothWays = way.LanesBothWays;
+                    break;
+                }
+            }
+
+            foreach (var way in ways.Skip(1))
+            {
+                if (way.Sidewalk > merged.Sidewalk)
+                    merged.Sidewalk = way.Sidewalk;
+
+                if (way.ParkingSide > merged.ParkingSide)
+                    merged.ParkingSide = way.ParkingSide;
+
+                if (way.ParkingStyle > merged.ParkingStyle)
+                    merged.ParkingStyle = way.ParkingStyle;
             }
 
             for (var i = 0; i < ways.Count; i++)
@@ -759,6 +1378,14 @@ namespace cs2_osm_importer
                 return false;
 
             if (a.Lanes > 0 && b.Lanes > 0 && a.Lanes != b.Lanes)
+                return false;
+
+            if (a.LanesForward != b.LanesForward ||
+                a.LanesBackward != b.LanesBackward ||
+                a.LanesBothWays != b.LanesBothWays)
+                return false;
+
+            if (a.ParkingSide != b.ParkingSide || a.ParkingStyle != b.ParkingStyle)
                 return false;
 
             return true;
@@ -1160,7 +1787,7 @@ namespace cs2_osm_importer
             if (string.IsNullOrWhiteSpace(roadLabel))
                 return string.Empty;
 
-            return $"{way.Highway.Trim()}|{roadLabel}";
+            return $"{way.Highway.Trim()}|{roadLabel}|{way.Lanes}|{way.LanesForward}|{way.LanesBackward}|{way.LanesBothWays}|{way.ParkingSide}|{way.ParkingStyle}";
         }
 
         private static bool IsSupportedHighway(string highway)

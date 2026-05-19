@@ -5,6 +5,7 @@ using Colossal.Logging;
 using Game;
 using Game.Modding;
 using Game.SceneFlow;
+using System.IO;
 
 
 namespace cs2_osm_importer
@@ -13,6 +14,7 @@ namespace cs2_osm_importer
     {
         public const string Id = "cs2-osm-importer";
         public const string ToolId = "OSM Importer Tool";
+        public static string ModDirectory { get; private set; } = string.Empty;
 
         public static ILog log = LogManager.GetLogger($"{nameof(cs2_osm_importer)}.{nameof(Mod)}")
             .SetShowsErrorsInUI(true);
@@ -26,7 +28,10 @@ namespace cs2_osm_importer
             GameManager.instance.localizationManager.AddSource("en-US", OsmLocalization.CreateEnglishSource());
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
+            {
                 log.Info($"Current mod asset at {asset.path}");
+                ModDirectory = Path.GetDirectoryName(asset.path) ?? string.Empty;
+            }
 
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<OsmImportToolSystem>(SystemUpdatePhase.ToolUpdate);
