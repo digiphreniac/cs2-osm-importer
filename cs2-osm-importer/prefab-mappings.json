@@ -1509,6 +1509,38 @@
           "prefab": "Double Tram Track"
         }
       ]
+    },
+    {
+      "roadTypes": [
+        "roundabout"
+      ],
+      "rules": [
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "prefab": "SmallRoundabout01"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "prefab": "MediumRoundabout01"
+        },
+        {
+          "lane": "3",
+          "oneway": "yes",
+          "prefab": "LargeRoundabout01"
+        },
+        {
+          "lane": "4",
+          "oneway": "yes",
+          "prefab": "XLRoundabout01"
+        },
+        {
+          "lane": "5",
+          "oneway": "yes",
+          "prefab": "XLRoundabout01"
+        }
+      ]
     }
   ]
 }

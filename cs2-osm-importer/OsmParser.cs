@@ -196,6 +196,7 @@ namespace cs2_osm_importer
             var isCutting = false;
             var inclineDirection = 0;
             var inclinePercent = 0f;
+            var isRoundabout = false;
             var hasExplicitLaneCount = false;
             var forwardLaneCount = 0;
             var backwardLaneCount = 0;
@@ -269,6 +270,8 @@ namespace cs2_osm_importer
                     {
                         // parsed above
                     }
+                    else if (key == "junction" && IsRoundaboutJunction(value))
+                        isRoundabout = true;
                     else if (key == "railway")
                         wayRailway = value;
                     else if (key == "footway")
@@ -332,8 +335,11 @@ namespace cs2_osm_importer
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
+            way.IsRoundabout = isRoundabout || IsClosedLoopWay(way.NodeIds);
             way.OneWayDirection = oneWayDirection;
-            way.IsOneWay = oneWayDirection != 0;
+            way.IsOneWay = oneWayDirection != 0 || way.IsRoundabout;
+            if (way.IsRoundabout && way.OneWayDirection == 0)
+                way.OneWayDirection = 1;
 
             if (way.Highway is "monorail" or "light_rail" or "subway" || wayRailway is "monorail" or "light_rail" or "subway")
             {
@@ -400,7 +406,13 @@ namespace cs2_osm_importer
                 way.UsesStructuralElevation);
 
             if (sampleHeight == null)
-                Simplify(way.Points, Math.Max(0f, options.SimplifyToleranceMeters * options.ScaleFactor));
+            {
+                if (!way.IsRoundabout)
+                {
+                    var simplifyTolerance = Math.Max(0f, options.SimplifyToleranceMeters * options.ScaleFactor);
+                    Simplify(way.Points, simplifyTolerance);
+                }
+            }
             return way.Points.Count >= 2;
         }
 
@@ -675,6 +687,7 @@ namespace cs2_osm_importer
                 case "primary_link":
                 case "secondary_link":
                 case "tertiary_link":
+                case "service":
                 case "rail":
                 case "monorail":
                 case "light_rail":
@@ -889,6 +902,23 @@ namespace cs2_osm_importer
                 default:
                     return OsmParkingStyleType.None;
             }
+        }
+
+        private static bool IsRoundaboutJunction(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "roundabout":
+                case "circular":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsClosedLoopWay(List<long> nodeIds)
+        {
+            return nodeIds != null && nodeIds.Count >= 4 && nodeIds[0] == nodeIds[nodeIds.Count - 1];
         }
 
         private static List<OsmWay> MergeSimpleConnectedWays(List<OsmWay> ways, out int mergedWayCount)
@@ -1135,7 +1165,8 @@ namespace cs2_osm_importer
                 InclinePercent = way.InclinePercent,
                 Sidewalk = way.Sidewalk,
                 ParkingSide = way.ParkingSide,
-                ParkingStyle = way.ParkingStyle
+                ParkingStyle = way.ParkingStyle,
+                IsRoundabout = way.IsRoundabout
             };
 
             if (reversed)
@@ -1188,7 +1219,8 @@ namespace cs2_osm_importer
                 InclinePercent = ways[0].InclinePercent,
                 Sidewalk = ways[0].Sidewalk,
                 ParkingSide = ways[0].ParkingSide,
-                ParkingStyle = ways[0].ParkingStyle
+                ParkingStyle = ways[0].ParkingStyle,
+                IsRoundabout = ways[0].IsRoundabout
             };
 
             if (merged.Lanes <= 0)
@@ -1876,12 +1908,69 @@ namespace cs2_osm_importer
             if (points.Count <= 2 || tolerance <= 0f)
                 return;
 
+            if (IsClosedLoop(points))
+            {
+                SimplifyClosedLoop(points, tolerance);
+                return;
+            }
+
             for (var i = points.Count - 2; i > 0; i--)
             {
                 var distance = DistanceToSegment(points[i], points[i - 1], points[i + 1]);
                 if (distance <= tolerance)
                     points.RemoveAt(i);
             }
+        }
+
+        private static void SimplifyClosedLoop(List<float3> points, float tolerance)
+        {
+            if (points.Count <= 4 || tolerance <= 0f)
+                return;
+
+            if (math.distance(new float2(points[0].x, points[0].z), new float2(points[points.Count - 1].x, points[points.Count - 1].z)) <= 0.5f)
+                points.RemoveAt(points.Count - 1);
+
+            if (points.Count <= 4)
+            {
+                points.Add(points[0]);
+                return;
+            }
+
+            var changed = true;
+            while (changed && points.Count > 4)
+            {
+                changed = false;
+
+                for (var i = 1; i < points.Count; i++)
+                {
+                    if (points.Count <= 4)
+                        break;
+
+                    var prev = points[(i - 1 + points.Count) % points.Count];
+                    var curr = points[i];
+                    var next = points[(i + 1) % points.Count];
+
+                    if (DistanceToSegment(curr, prev, next) > tolerance)
+                        continue;
+
+                    points.RemoveAt(i);
+                    changed = true;
+                    break;
+                }
+            }
+
+            points.Add(points[0]);
+        }
+
+        private static bool IsClosedLoop(List<float3> points)
+        {
+            return points != null && points.Count >= 4 &&
+                   math.distance(new float2(points[0].x, points[0].z), new float2(points[points.Count - 1].x, points[points.Count - 1].z)) <= 0.5f;
+        }
+
+        private static bool PointsAreNearlyEqual(float3 a, float3 b)
+        {
+            return math.distance(new float2(a.x, a.z), new float2(b.x, b.z)) <= 0.5f && Math.Abs(a.y - b.y) <= 1f;
         }
 
         private static float DistanceToSegment(float3 point, float3 start, float3 end)

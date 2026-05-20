@@ -89,6 +89,7 @@ namespace cs2_osm_importer
         public string Highway { get; set; } = string.Empty;
         public string Footway { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
+        public bool IsRoundabout { get; set; }
         public int Lanes { get; set; }
         public int LanesForward { get; set; }
         public int LanesBackward { get; set; }

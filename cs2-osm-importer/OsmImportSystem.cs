@@ -34,9 +34,19 @@ namespace cs2_osm_importer
             LoadDataQueued,
             LoadData,
             QueueDefinitions,
+            QueueRoundaboutConnectors,
+            QueueRoundabouts,
             WaitForGameApply,
             RemoveIntersectingPillars,
             DeleteRoads
+        }
+
+        private enum ApplyWaitPurpose
+        {
+            None,
+            AfterConnectors,
+            AfterRoundabouts,
+            AfterRoads
         }
 
         private PrefabSystem _prefabSystem;
@@ -89,14 +99,18 @@ namespace cs2_osm_importer
             { "track", new List<PrefabSelectionRule>() },
             { "cycleway", new List<PrefabSelectionRule>() },
             { "pedestrian", new List<PrefabSelectionRule>() },
+            { "roundabout", new List<PrefabSelectionRule>() },
         };
         private int _wayIndex;
         private int _pointIndex;
         private int _typeIndex;
+        private int _roundaboutWayIndex;
+        private int _roundaboutConnectorWayIndex;
         private int _importedSegments;
         private int _lastLoggedSegments;
         private int _sessionId;
         private int _applyWaitFrames;
+        private ApplyWaitPurpose _applyWaitPurpose;
         private int _baselineEdgeCount;
         private HashSet<Entity> _baselineSegments = new HashSet<Entity>();
         private HashSet<Entity> _generatedEdgeEntities = new HashSet<Entity>();
@@ -111,6 +125,7 @@ namespace cs2_osm_importer
         private bool _loggedFirstQueuedSegment;
         private bool _loggedTerrainMethodProbe;
         private bool _loggedPrefabCatalog;
+        private bool _loggedRoundaboutPrefabDiagnostics;
         private bool _hasTerrainHeightData;
         private TerrainHeightData _terrainHeightData;
         private struct QueuedSegmentInfo
@@ -122,11 +137,15 @@ namespace cs2_osm_importer
             public float ElevationOffset;
             public string Name;
             public int Lanes;
+            public bool IsRoundabout;
             public float3 MidPoint => (StartPos + EndPos) * 0.5f;
         }
 
         private List<QueuedSegmentInfo> _queuedSegmentInfos = new List<QueuedSegmentInfo>();
         private List<string> _generationTypeOrder = new List<string>();
+        private List<OsmWay> _roundaboutWays = new List<OsmWay>();
+        private List<OsmWay> _roundaboutConnectorWays = new List<OsmWay>();
+        private HashSet<long> _roundaboutConnectorWayIds = new HashSet<long>();
         private Dictionary<string, int> _typeWayCounts = new Dictionary<string, int>();
         private int _totalGenerationWays;
         private bool _roadNamesApplied;
@@ -194,6 +213,12 @@ namespace cs2_osm_importer
                     break;
                 case WorkPhase.QueueDefinitions:
                     ProcessGenerationBatch();
+                    break;
+                case WorkPhase.QueueRoundaboutConnectors:
+                    ProcessRoundaboutConnectorBatch();
+                    break;
+                case WorkPhase.QueueRoundabouts:
+                    ProcessRoundaboutBatch();
                     break;
                 case WorkPhase.WaitForGameApply:
                     WaitForGeneratedRoads();
@@ -355,10 +380,13 @@ namespace cs2_osm_importer
                 _wayIndex = 0;
                 _pointIndex = 0;
                 _typeIndex = 0;
+                _roundaboutWayIndex = 0;
+                _roundaboutConnectorWayIndex = 0;
                 _importedSegments = 0;
                 _lastLoggedSegments = 0;
                 _sessionId++;
                 _applyWaitFrames = 0;
+                _applyWaitPurpose = ApplyWaitPurpose.None;
                 _lastPendingDefinitions = -1;
                 _lastWaitLogFrame = 0;
                 _baselineEdgeCount = CountAllNetEdges();
@@ -370,12 +398,27 @@ namespace cs2_osm_importer
                 Mod.log.Info($"Baseline pillar entity count: {_baselinePillarEntities.Count}");
                 _generatedEdgeEntities.Clear();
                 _queuedSegmentInfos.Clear();
+                _roundaboutWays = _document?.Ways?.Where(way => way.IsRoundabout).ToList() ?? new List<OsmWay>();
+                Mod.log.Info($"Detected {_roundaboutWays.Count} roundabout ways in the current import document.");
+                var roundaboutNodeIds = new HashSet<long>();
+                foreach (var roundaboutWay in _roundaboutWays)
+                {
+                    foreach (var nodeId in roundaboutWay.NodeIds)
+                        roundaboutNodeIds.Add(nodeId);
+                }
+
+                _roundaboutConnectorWays = _document?.Ways?
+                    .Where(way => way != null && !way.IsRoundabout && ShouldGenerateWay(way) && way.NodeIds.Any(roundaboutNodeIds.Contains))
+                    .OrderBy(way => way.Id)
+                    .ToList() ?? new List<OsmWay>();
+                _roundaboutConnectorWayIds = _roundaboutConnectorWays.Select(way => way.Id).ToHashSet();
+                Mod.log.Info($"Detected {_roundaboutConnectorWays.Count} roundabout connector ways that will be queued first.");
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _typeWayCounts.Clear();
                 _totalGenerationWays = 0;
                 foreach (var type in _generationTypeOrder)
                 {
-                    var count = GetWaysForHighwayType(type).Count;
+                    var count = GetWaysForHighwayType(type, false).Count;
                     _typeWayCounts[type] = count;
                     _totalGenerationWays += count;
                 }
@@ -384,6 +427,9 @@ namespace cs2_osm_importer
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
                 Mod.log.Info($"Baseline edge count before OSM road generation: {_baselineEdgeCount}");
+                _phase = _roundaboutConnectorWays.Count > 0
+                    ? WorkPhase.QueueRoundaboutConnectors
+                    : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply);
                 SetStatus(_generationTypeOrder.Count > 0
                     ? BuildGenerationDetailStatus()
                     : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
@@ -401,10 +447,11 @@ namespace cs2_osm_importer
             try
             {
                 var segmentsThisFrame = 0;
+
                 while (_typeIndex < _generationTypeOrder.Count)
                 {
                     var highwayType = _generationTypeOrder[_typeIndex];
-                    var typeWays = GetWaysForHighwayType(highwayType);
+                    var typeWays = GetWaysForHighwayType(highwayType, false);
                     if (typeWays.Count == 0)
                     {
                         _typeIndex++;
@@ -512,6 +559,7 @@ namespace cs2_osm_importer
                             $"Queued road point sample: first={FormatPoint(firstPoint)}, last={FormatPoint(lastPoint)}, " +
                             $"min={FormatPoint(_document.Min)}, max={FormatPoint(_document.Max)}");
                     }
+                    _applyWaitPurpose = ApplyWaitPurpose.AfterRoads;
                     _phase = WorkPhase.WaitForGameApply;
                     StatusSummary = "Generation complete";
                 }
@@ -520,6 +568,86 @@ namespace cs2_osm_importer
             {
                 Mod.log.Error(ex);
                 Complete(LF("OsmImporter.Status.GenerateFailed", "Failed to generate roads: {0}", ex.Message));
+            }
+        }
+
+        private void ProcessRoundaboutConnectorBatch()
+        {
+            try
+            {
+                var segmentsThisFrame = 0;
+
+                while (_roundaboutConnectorWayIndex < _roundaboutConnectorWays.Count)
+                {
+                    var way = _roundaboutConnectorWays[_roundaboutConnectorWayIndex];
+                    if (way == null)
+                    {
+                        _roundaboutConnectorWayIndex++;
+                        continue;
+                    }
+
+                    var typePrefab = GetPrefabForHighwayType(way);
+
+                    while (_pointIndex < way.Points.Count - 1)
+                    {
+                        var mergeEnd = _pointIndex + 1;
+                        if (way.UsesStructuralElevation)
+                        {
+                            while (mergeEnd + 1 < way.Points.Count &&
+                                   PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))
+                            {
+                                mergeEnd++;
+                            }
+                        }
+
+                        var segStart = way.Points[_pointIndex];
+                        var segEnd = way.Points[mergeEnd];
+                        var terrainStart = _pointIndex < way.TerrainHeights.Count ? way.TerrainHeights[_pointIndex] : segStart.y;
+                        var terrainEnd = mergeEnd < way.TerrainHeights.Count ? way.TerrainHeights[mergeEnd] : segEnd.y;
+                        var created = CreateNetCourseDefinition(segStart, segEnd, typePrefab, way.BaseElevationOffsetMeters);
+                        _pointIndex = mergeEnd;
+                        if (created != Entity.Null)
+                        {
+                            HasGeneratedAssets = true;
+                            _importedSegments++;
+                            _queuedSegmentInfos.Add(new QueuedSegmentInfo
+                            {
+                                StartPos = segStart,
+                                EndPos = segEnd,
+                                StartTerrainHeight = terrainStart,
+                                EndTerrainHeight = terrainEnd,
+                                ElevationOffset = way.BaseElevationOffsetMeters,
+                                Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
+                                Lanes = way.Lanes
+                            });
+                        }
+
+                        segmentsThisFrame++;
+                        if (segmentsThisFrame >= MaxSegmentsPerFrame)
+                            break;
+                    }
+
+                    if (_pointIndex < way.Points.Count - 1)
+                        break;
+
+                    _roundaboutConnectorWayIndex++;
+                    _pointIndex = 0;
+                }
+
+                if (_roundaboutConnectorWayIndex >= _roundaboutConnectorWays.Count)
+                {
+                    _applyWaitPurpose = ApplyWaitPurpose.AfterConnectors;
+                    _phase = WorkPhase.WaitForGameApply;
+                    _applyWaitFrames = 0;
+                    StatusSummary = "Waiting for roundabout connectors to apply";
+                    SetStatus(StatusSummary);
+                    Mod.log.Info($"Queued {_roundaboutConnectorWays.Count} roundabout connector ways. Session {_sessionId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Error(ex);
+                Complete(LF("OsmImporter.Status.RoundaboutConnectorQueueFailed", "Failed to queue roundabout connector roads: {0}", ex.Message));
             }
         }
 
@@ -564,12 +692,49 @@ namespace cs2_osm_importer
                     Mod.log.Info($"OSM road generation wait: {consumedDefinitions}/{_importedSegments} definitions consumed, {generatedRoadEdges} new road edges detected");
                 }
 
-                if (_applyWaitFrames >= 30 && (pendingDefinitions == 0 || generatedRoadEdges > 0))
+                if (_applyWaitFrames >= 30 && generatedRoadEdges > 0)
                 {
-                    if (pendingDefinitions > 0)
+                    if (_applyWaitPurpose == ApplyWaitPurpose.AfterConnectors && _roundaboutWays.Count > 0)
                     {
-                    Mod.log.Info($"CS2 generated {generatedRoadEdges} road edges but {pendingDefinitions} definitions remain pending. Proceeding with road names.");
+                        _applyWaitPurpose = ApplyWaitPurpose.AfterRoundabouts;
+                        _phase = WorkPhase.QueueRoundabouts;
+                        _applyWaitFrames = 0;
+                        StatusSummary = LF("OsmImporter.Status.QueueingRoundabouts", "Queueing roundabouts after nearby roads apply...");
+                        Mod.log.Info($"Connector roads applied. Queueing {_roundaboutWays.Count} roundabouts next. Session {_sessionId}");
+                        return;
                     }
+
+                    if (_applyWaitPurpose == ApplyWaitPurpose.AfterConnectors && _generationTypeOrder.Count > 0)
+                    {
+                        _applyWaitPurpose = ApplyWaitPurpose.AfterRoads;
+                        _phase = WorkPhase.QueueDefinitions;
+                        _applyWaitFrames = 0;
+                        _typeIndex = 0;
+                        _wayIndex = 0;
+                        _pointIndex = 0;
+                        StatusSummary = "Generating remaining roads...";
+                        Mod.log.Info($"Connector roads applied. Queueing remaining roads next. Session {_sessionId}");
+                        return;
+                    }
+
+                    if (_applyWaitPurpose == ApplyWaitPurpose.AfterConnectors)
+                    {
+                        _applyWaitPurpose = ApplyWaitPurpose.AfterRoads;
+                    }
+
+                    if (_applyWaitPurpose == ApplyWaitPurpose.AfterRoundabouts && _generationTypeOrder.Count > 0)
+                    {
+                        _applyWaitPurpose = ApplyWaitPurpose.AfterRoads;
+                        _phase = WorkPhase.QueueDefinitions;
+                        _applyWaitFrames = 0;
+                        _typeIndex = 0;
+                        _wayIndex = 0;
+                        _pointIndex = 0;
+                        StatusSummary = "Generating remaining roads...";
+                        Mod.log.Info($"Roundabouts applied. Queueing remaining roads next. Session {_sessionId}");
+                        return;
+                    }
+
                     ApplyQueuedRoadNames();
                     var uniqueNames = _queuedSegmentInfos
                         .Select(i => i.Name)
@@ -592,19 +757,91 @@ namespace cs2_osm_importer
 
                 if (_applyWaitFrames >= MaxApplyWaitFrames)
                 {
-                    var message = pendingDefinitions > 0
-                        ? LF("OsmImporter.Status.WaitingContinue", "Queued {0} road definitions; CS2 consumed {1} so far. Leave the editor running or try fewer road types.", _importedSegments, consumedDefinitions)
-                        : LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
+                    if (pendingDefinitions > 0)
+                    {
+                        if (_applyWaitPurpose == ApplyWaitPurpose.AfterConnectors && _roundaboutWays.Count > 0)
+                        {
+                            _applyWaitPurpose = ApplyWaitPurpose.AfterRoundabouts;
+                            _phase = WorkPhase.QueueRoundabouts;
+                            _applyWaitFrames = 0;
+                            StatusSummary = LF("OsmImporter.Status.QueueingRoundabouts", "Queueing roundabouts after nearby roads apply...");
+                            Mod.log.Info($"Timeout reached while waiting for connector roads. Queueing {_roundaboutWays.Count} roundabouts anyway. Session {_sessionId}, pending definitions {pendingDefinitions}");
+                            return;
+                        }
 
-                    Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
+                        if (_applyWaitPurpose == ApplyWaitPurpose.AfterRoundabouts && _generationTypeOrder.Count > 0)
+                        {
+                            _applyWaitPurpose = ApplyWaitPurpose.AfterRoads;
+                            _phase = WorkPhase.QueueDefinitions;
+                            _applyWaitFrames = 0;
+                            _typeIndex = 0;
+                            _wayIndex = 0;
+                            _pointIndex = 0;
+                            StatusSummary = "Generating remaining roads...";
+                            Mod.log.Info($"Timeout reached while waiting for roundabouts. Queueing remaining roads anyway. Session {_sessionId}, pending definitions {pendingDefinitions}");
+                            return;
+                        }
+
+                        var message = LF("OsmImporter.Status.WaitingContinue", "Queued {0} road definitions; CS2 consumed {1} so far. Leave the editor running or try fewer road types.", _importedSegments, consumedDefinitions);
+                        Mod.log.Info($"{message} Session {_sessionId}, pending definitions {pendingDefinitions}");
+                        StatusSummary = message;
+                        _applyWaitFrames = 0;
+                        return;
+                    }
+
+                    var fallbackMessage = LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
+                    Mod.log.Info($"{fallbackMessage} Session {_sessionId}");
                     HasGeneratedAssets = true;
-                    Complete(message);
+                    Complete(fallbackMessage);
                 }
             }
             catch (Exception ex)
             {
                 Mod.log.Error(ex);
                 Complete(LF("OsmImporter.Status.WaitingFailed", "Failed while waiting for generated roads: {0}", ex.Message));
+            }
+        }
+
+        private void ProcessRoundaboutBatch()
+        {
+            try
+            {
+                var segmentsThisFrame = 0;
+
+                while (_roundaboutWayIndex < _roundaboutWays.Count)
+                {
+                    var way = _roundaboutWays[_roundaboutWayIndex];
+                    var roadPrefab = GetPrefabForHighwayType(way);
+                    var roundaboutEntity = CreateRoundaboutDefinition(way, roadPrefab);
+                    if (roundaboutEntity != Entity.Null)
+                    {
+                        HasGeneratedAssets = true;
+                        _importedSegments++;
+                        segmentsThisFrame++;
+                    }
+
+                    var visualEntity = CreateRoundaboutVisualDefinition(way);
+                    if (visualEntity != Entity.Null)
+                        HasGeneratedAssets = true;
+
+                    _roundaboutWayIndex++;
+                    if (segmentsThisFrame >= MaxSegmentsPerFrame)
+                        break;
+                }
+
+                if (_roundaboutWayIndex >= _roundaboutWays.Count)
+                {
+                    _applyWaitPurpose = ApplyWaitPurpose.AfterRoundabouts;
+                    _phase = WorkPhase.WaitForGameApply;
+                    _applyWaitFrames = 0;
+                    StatusSummary = "Roundabouts queued";
+                    SetStatus(BuildGenerationDetailStatus());
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Error(ex);
+                Complete(LF("OsmImporter.Status.RoundaboutQueueFailed", "Failed to queue roundabouts: {0}", ex.Message));
             }
         }
 
@@ -972,6 +1209,164 @@ namespace cs2_osm_importer
             EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
 
             return entity;
+        }
+
+        private Entity CreateRoundaboutDefinition(OsmWay way, Entity prefabEntity)
+        {
+            if (way == null || prefabEntity == Entity.Null || !TryBuildRoundaboutGeometry(way, out var center, out _, out _, out var radius))
+                return Entity.Null;
+
+            if (!_loggedFirstQueuedSegment)
+            {
+                _loggedFirstQueuedSegment = true;
+                Mod.log.Info($"First queued roundabout sample: center={FormatPoint(center)}, radius={radius:F2}, prefab={DescribePrefab(prefabEntity)}");
+            }
+
+            var entity = EntityManager.CreateEntity();
+            EntityManager.AddComponentData(entity, new CreationDefinition
+            {
+                m_Prefab = prefabEntity,
+                m_SubPrefab = Entity.Null,
+                m_Original = Entity.Null,
+                m_Owner = Entity.Null,
+                m_Attached = Entity.Null,
+                m_Flags = CreationFlags.Permanent,
+                m_RandomSeed = ImportedHash(center, center + new float3(radius, 0f, 0f))
+            });
+            EntityManager.AddComponentData(entity, new Game.Net.Roundabout
+            {
+                m_Radius = radius
+            });
+            var roundaboutAxis = new float3(radius, 0f, 0f);
+            EntityManager.AddComponentData(entity, new NetCourse
+            {
+                m_StartPosition = new CoursePos
+                {
+                    m_Entity = Entity.Null,
+                    m_Position = center + roundaboutAxis,
+                    m_Rotation = quaternion.identity,
+                    m_Elevation = float2.zero,
+                    m_CourseDelta = 0f,
+                    m_SplitPosition = 0f,
+                    m_Flags = CoursePosFlags.IsFirst,
+                    m_ParentMesh = -1
+                },
+                m_EndPosition = new CoursePos
+                {
+                    m_Entity = Entity.Null,
+                    m_Position = center - roundaboutAxis,
+                    m_Rotation = quaternion.identity,
+                    m_Elevation = float2.zero,
+                    m_CourseDelta = 1f,
+                    m_SplitPosition = 1f,
+                    m_Flags = CoursePosFlags.IsLast,
+                    m_ParentMesh = -1
+                },
+                m_Curve = new Bezier4x3(center + roundaboutAxis, center + roundaboutAxis, center - roundaboutAxis, center - roundaboutAxis),
+                m_Elevation = float2.zero,
+                m_Length = math.PI * radius
+            });
+            EntityManager.AddComponentData(entity, new Updated());
+            EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
+
+            return entity;
+        }
+
+        private Entity CreateRoundaboutVisualDefinition(OsmWay way)
+        {
+            if (way == null || !way.IsRoundabout || !TryBuildRoundaboutGeometry(way, out var center, out _, out _, out var radius))
+                return Entity.Null;
+
+            var prefabEntity = TryGetRoundaboutPrefabForWay(way);
+            if (prefabEntity == Entity.Null)
+                return Entity.Null;
+
+            var entity = EntityManager.CreateEntity();
+            EntityManager.AddComponentData(entity, new CreationDefinition
+            {
+                m_Prefab = prefabEntity,
+                m_SubPrefab = Entity.Null,
+                m_Original = Entity.Null,
+                m_Owner = Entity.Null,
+                m_Attached = Entity.Null,
+                m_Flags = CreationFlags.Permanent,
+                m_RandomSeed = ImportedHash(center, center + new float3(radius, 0f, 0f))
+            });
+            EntityManager.AddComponentData(entity, new Game.Net.Roundabout
+            {
+                m_Radius = radius
+            });
+            EntityManager.AddComponentData(entity, new ObjectDefinition
+            {
+                m_Position = center,
+                m_LocalPosition = center,
+                m_Scale = 1f,
+                m_Rotation = quaternion.identity
+            });
+            EntityManager.AddComponentData(entity, new Updated());
+            EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
+
+            Mod.log.Info($"Queued roundabout island visual '{DescribePrefab(prefabEntity)}' at center={FormatPoint(center)}, radius={radius:F2}.");
+            return entity;
+        }
+
+        private static QueuedSegmentInfo BuildRoundaboutQueuedInfo(OsmWay way)
+        {
+            if (way == null || !TryBuildRoundaboutGeometry(way, out _, out var start, out var end, out _))
+                return default;
+
+            return new QueuedSegmentInfo
+            {
+                StartPos = start,
+                EndPos = end,
+                StartTerrainHeight = start.y,
+                EndTerrainHeight = end.y,
+                ElevationOffset = way.BaseElevationOffsetMeters,
+                Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
+                Lanes = way.Lanes,
+                IsRoundabout = true,
+            };
+        }
+
+        private static bool TryBuildRoundaboutGeometry(OsmWay way, out float3 center, out float3 start, out float3 end, out float radius)
+        {
+            center = float3.zero;
+            start = float3.zero;
+            end = float3.zero;
+            radius = 0f;
+
+            var points = way?.Points;
+            if (points == null || points.Count < 3)
+                return false;
+
+            var closedCount = points.Count;
+            if (math.distance(new float2(points[0].x, points[0].z), new float2(points[points.Count - 1].x, points[points.Count - 1].z)) <= 0.5f)
+                closedCount--;
+
+            if (closedCount < 3)
+                return false;
+
+            for (var i = 0; i < closedCount; i++)
+                center += points[i];
+            center /= closedCount;
+
+            for (var i = 0; i < closedCount; i++)
+                radius += math.distance(new float2(points[i].x, points[i].z), new float2(center.x, center.z));
+            radius /= closedCount;
+
+            if (radius < MinSegmentLengthMeters)
+                return false;
+
+            start = points[0];
+            var oppositeIndex = closedCount / 2;
+            end = points[Math.Min(oppositeIndex, closedCount - 1)];
+            if (math.distance(new float2(start.x, start.z), new float2(end.x, end.z)) < MinSegmentLengthMeters)
+            {
+                start = center + new float3(radius, 0f, 0f);
+                end = center - new float3(radius, 0f, 0f);
+            }
+
+            return true;
         }
 
         private void ApplyQueuedRoadNames()
@@ -1434,6 +1829,12 @@ namespace cs2_osm_importer
             if (way == null || string.IsNullOrWhiteSpace(way.Highway))
                 return _prefabEntity;
 
+            if (way.IsRoundabout)
+            {
+                Mod.log.Warn($"Roundabout prefab mappings are central-island assets, not road prefabs. Using road prefab selection for highway type '{way.Highway}'.");
+                return GetPrefabForHighwayType(way.Highway, way.Lanes, way.Sidewalk);
+            }
+
             if (HasManualPrefabRulesForWay(way))
             {
                 if (TryGetManualPrefabForWay(way, out var manualPrefab))
@@ -1661,6 +2062,163 @@ namespace cs2_osm_importer
             return Entity.Null;
         }
 
+        private Entity TryGetRoundaboutPrefabForWay(OsmWay way)
+        {
+            if (TryGetManualRoundaboutPrefabForWay(way, out var manualPrefab))
+                return manualPrefab;
+
+            var fallback = TryFindRoundaboutPrefabByNameFallback(way);
+            if (fallback != Entity.Null)
+                return fallback;
+
+            return Entity.Null;
+        }
+
+        private bool TryGetManualRoundaboutPrefabForWay(OsmWay way, out Entity prefabEntity)
+        {
+            prefabEntity = Entity.Null;
+
+            EnsurePrefabRulesLoaded();
+            if (way == null || DefaultPrefabRulesByRoadType == null)
+                return false;
+
+            if (!DefaultPrefabRulesByRoadType.TryGetValue("roundabout", out var rules) || rules == null || rules.Count == 0)
+                return false;
+
+            var candidateSource = GetAnyRoundaboutPrefabCandidates().ToList();
+            var matchedRule = rules.FirstOrDefault(rule => rule != null && rule.Matches(way));
+            if (matchedRule == null)
+                matchedRule = rules.FirstOrDefault(rule => rule != null && !string.IsNullOrWhiteSpace(rule.PrefabName));
+
+            if (matchedRule == null || string.IsNullOrWhiteSpace(matchedRule.PrefabName))
+                return false;
+
+            if (TryResolveRulePrefab(matchedRule.PrefabName, candidateSource, out prefabEntity) ||
+                TryResolvePrefabByNameAcrossAllPrefabs(matchedRule.PrefabName, IsSuitableRoundaboutPrefabName, out prefabEntity))
+            {
+                if (!HasRoundaboutComposition(prefabEntity))
+                {
+                    Mod.log.Warn($"Resolved roundabout prefab '{DescribePrefab(prefabEntity)}' does not expose roundabout composition; rejecting.");
+                    prefabEntity = Entity.Null;
+                    return false;
+                }
+
+                Mod.log.Info($"Selected roundabout prefab '{DescribePrefab(prefabEntity)}' from prefab-mappings.json for highway type '{way.Highway}'.");
+                return true;
+            }
+
+            if (candidateSource.Count > 0 && _prefabSystem.TryGetEntity(candidateSource[0], out prefabEntity))
+            {
+                if (!HasRoundaboutComposition(prefabEntity))
+                {
+                    Mod.log.Warn($"Roundabout mapping '{matchedRule.PrefabName}' resolved to non-roundabout prefab '{DescribePrefab(prefabEntity)}'; rejecting.");
+                    prefabEntity = Entity.Null;
+                    return false;
+                }
+
+                Mod.log.Warn($"Roundabout mapping '{matchedRule.PrefabName}' could not be resolved; using first available roundabout prefab '{DescribePrefab(prefabEntity)}'.");
+                return true;
+            }
+
+            LogRoundaboutPrefabLookupDiagnostics(way, matchedRule.PrefabName, candidateSource.Count);
+
+            return false;
+        }
+
+        private Entity TryFindRoundaboutPrefabByNameFallback(OsmWay way)
+        {
+            if (_prefabSystem == null)
+                return Entity.Null;
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetObjectData>());
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+
+            var matches = prefabs
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => new { Entity = e, Name = GetPrefabName(e), PrefabBase = GetPrefabBase(e) })
+                .Where(x => IsSuitableRoundaboutPrefabName(x.Name) || HasRoundaboutComposition(x.Entity))
+                .ToList();
+
+            if (matches.Count == 0)
+            {
+                Mod.log.Warn($"Roundabout prefab fallback search found no usable candidates for highway type '{way.Highway}'.");
+                LogRoundaboutPrefabLookupDiagnostics(way, string.Empty, 0);
+                return Entity.Null;
+            }
+
+            Mod.log.Info($"Roundabout prefab fallback candidates: {string.Join(", ", matches.Take(12).Select(x => x.Name))}");
+
+            var preferredNames = GetPreferredRoundaboutPrefabNames(way).ToArray();
+            foreach (var preferredName in preferredNames)
+            {
+                var exact = matches.FirstOrDefault(x => x.Name.Equals(preferredName, StringComparison.OrdinalIgnoreCase));
+                if (exact != null)
+                {
+                    Mod.log.Info($"Selected roundabout prefab by exact fallback name '{exact.Name}' for highway type '{way.Highway}'.");
+                    return exact.Entity;
+                }
+
+                var fuzzy = matches.FirstOrDefault(x => PrefabNameMatches(x.Name, preferredName));
+                if (fuzzy != null)
+                {
+                    Mod.log.Info($"Selected roundabout prefab by fuzzy fallback name '{fuzzy.Name}' for highway type '{way.Highway}'.");
+                    return fuzzy.Entity;
+                }
+            }
+
+            var first = matches[0];
+            Mod.log.Info($"Selected first fallback roundabout prefab '{first.Name}' for highway type '{way.Highway}'.");
+            return first.Entity;
+        }
+
+        private void LogRoundaboutPrefabLookupDiagnostics(OsmWay way, string requestedPrefabName, int candidateCount)
+        {
+            if (_loggedRoundaboutPrefabDiagnostics || _prefabSystem == null)
+                return;
+
+            _loggedRoundaboutPrefabDiagnostics = true;
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetObjectData>());
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+
+            var matches = prefabs
+                .Select(e => new
+                {
+                    Entity = e,
+                    Name = GetPrefabName(e),
+                    PrefabBaseName = GetPrefabBase(e)?.name ?? string.Empty,
+                    IsDlcGated = IsDlcGatedPrefab(e),
+                    HasNetData = EntityManager.HasComponent<NetData>(e),
+                    HasNetObjectData = EntityManager.HasComponent<NetObjectData>(e),
+                    HasRoundabout = HasRoundaboutComposition(e),
+                })
+                .Where(x =>
+                    (!string.IsNullOrWhiteSpace(x.Name) && x.Name.IndexOf("roundabout", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (!string.IsNullOrWhiteSpace(x.PrefabBaseName) && x.PrefabBaseName.IndexOf("roundabout", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    x.HasRoundabout ||
+                    x.HasNetObjectData)
+                .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            Mod.log.Info(
+                $"Roundabout prefab diagnostics for highway type '{way?.Highway ?? string.Empty}': requested='{requestedPrefabName}', usableCandidates={candidateCount}, matches={matches.Count}");
+
+            foreach (var match in matches.Take(40))
+            {
+                using var componentTypes = EntityManager.GetComponentTypes(match.Entity, Allocator.Temp);
+                var componentSummary = componentTypes.Length == 0
+                    ? string.Empty
+                    : string.Join(", ", componentTypes.Select(t => t.ToString()));
+
+                Mod.log.Info(
+                    $"  roundabout-candidate entity={match.Entity.Index}:{match.Entity.Version} name='{match.Name}' prefabBase='{match.PrefabBaseName}' dlcGated={match.IsDlcGated} netData={match.HasNetData} netObjectData={match.HasNetObjectData} roundaboutComponent={match.HasRoundabout} components=[{componentSummary}]");
+            }
+        }
+
         private Entity TryFindPrefabForHighwayType(
             string highwayType,
             int lanes,
@@ -1686,6 +2244,49 @@ namespace cs2_osm_importer
             return Entity.Null;
         }
 
+        private IEnumerable<PrefabBase> GetRoundaboutPrefabCandidates()
+        {
+            if (_prefabSystem == null)
+                return Enumerable.Empty<PrefabBase>();
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetObjectData>());
+
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+            return prefabs
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => GetPrefabBase(e))
+                .Where(p => p != null && IsSuitableRoundaboutPrefabName(p.name))
+                .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private IEnumerable<PrefabBase> GetAllRoundaboutPrefabCandidates()
+        {
+            if (_prefabSystem == null)
+                return Enumerable.Empty<PrefabBase>();
+
+            using var query = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PrefabData>(),
+                ComponentType.ReadOnly<NetObjectData>());
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+            return prefabs
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => GetPrefabBase(e))
+                .Where(p => p != null)
+                .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private IEnumerable<PrefabBase> GetAnyRoundaboutPrefabCandidates()
+        {
+            return GetAllRoundaboutPrefabCandidates()
+                .Where(p => p != null && IsSuitableRoundaboutPrefabName(p.name))
+                .OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         private bool TryGetManualPrefabForWay(OsmWay way, out Entity prefabEntity)
         {
             prefabEntity = Entity.Null;
@@ -1695,16 +2296,21 @@ namespace cs2_osm_importer
             if (way == null || rulesByType == null || rulesByType.Count == 0)
                 return false;
 
-            if (!rulesByType.TryGetValue(way.Highway ?? string.Empty, out var rules) || rules == null || rules.Count == 0)
+            var roadType = way.IsRoundabout ? "roundabout" : (way.Highway ?? string.Empty);
+            if (!rulesByType.TryGetValue(roadType, out var rules) || rules == null || rules.Count == 0)
                 return false;
 
-            var roadCandidates = (IsTrackLikeHighwayType(way.Highway)
-                ? GetTrackPrefabCandidates()
-                : IsPathLikeHighwayType(way.Highway)
-                    ? GetPathPrefabCandidates()
-                    : GetRoadPrefabCandidates())
-                .Where(p => p != null)
-                .ToList();
+            IEnumerable<PrefabBase> candidateSource;
+            if (way.IsRoundabout)
+                candidateSource = GetRoundaboutPrefabCandidates();
+            else if (IsTrackLikeHighwayType(way.Highway))
+                candidateSource = GetTrackPrefabCandidates();
+            else if (IsPathLikeHighwayType(way.Highway))
+                candidateSource = GetPathPrefabCandidates();
+            else
+                candidateSource = GetRoadPrefabCandidates();
+
+            var roadCandidates = candidateSource.Where(p => p != null).ToList();
 
             PrefabSelectionRule bestRule = null;
             var bestRuleScore = -1;
@@ -1725,11 +2331,17 @@ namespace cs2_osm_importer
             {
                 if (TryResolveRulePrefab(bestRule.PrefabName, roadCandidates, out prefabEntity))
                 {
-                    Mod.log.Info($"Selected manual prefab '{DescribePrefab(prefabEntity)}' for highway type '{way.Highway}'.");
+                    Mod.log.Info($"Selected manual prefab '{DescribePrefab(prefabEntity)}' for road type '{roadType}'.");
                     return true;
                 }
 
-                Mod.log.Warn($"Manual prefab rule for highway type '{way.Highway}' matched but prefab '{bestRule.PrefabName}' was not found among usable candidates.");
+                if (way.IsRoundabout && TryResolvePrefabByNameAcrossAllPrefabs(bestRule.PrefabName, IsSuitableRoundaboutPrefabName, out prefabEntity))
+                {
+                    Mod.log.Info($"Selected roundabout manual prefab '{DescribePrefab(prefabEntity)}' for highway type '{way.Highway}'.");
+                    return true;
+                }
+
+                Mod.log.Warn($"Manual prefab rule for road type '{roadType}' matched but prefab '{bestRule.PrefabName}' was not found among usable candidates.");
             }
 
             return false;
@@ -1741,10 +2353,14 @@ namespace cs2_osm_importer
             if (way == null)
                 return false;
 
-            return DefaultPrefabRulesByRoadType.TryGetValue(way.Highway ?? string.Empty, out var rules) && rules != null && rules.Count > 0;
+            var roadType = way.IsRoundabout ? "roundabout" : (way.Highway ?? string.Empty);
+            return DefaultPrefabRulesByRoadType.TryGetValue(roadType, out var rules) && rules != null && rules.Count > 0;
         }
 
         private bool TryResolveRulePrefab(string prefabName, List<NetPrefab> candidates, out Entity prefabEntity)
+            => TryResolveRulePrefab(prefabName, candidates?.Cast<PrefabBase>().ToList() ?? new List<PrefabBase>(), out prefabEntity);
+
+        private bool TryResolveRulePrefab(string prefabName, List<PrefabBase> candidates, out Entity prefabEntity)
         {
             prefabEntity = Entity.Null;
 
@@ -1752,8 +2368,103 @@ namespace cs2_osm_importer
                 return false;
 
             var match = candidates.FirstOrDefault(p => p != null && p.name.Equals(prefabName, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+                match = candidates.FirstOrDefault(p => p != null && PrefabNameMatches(p.name, prefabName));
 
             return match != null && _prefabSystem.TryGetEntity(match, out prefabEntity);
+        }
+
+        private bool TryResolvePrefabByNameAcrossAllPrefabs(string prefabName, Func<string, bool> isSuitableName, out Entity prefabEntity)
+        {
+            prefabEntity = Entity.Null;
+
+            if (string.IsNullOrWhiteSpace(prefabName) || _prefabSystem == null)
+                return false;
+
+            using var query = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<PrefabData>());
+            using var prefabs = query.ToEntityArray(Allocator.Temp);
+
+            var match = prefabs
+                .Where(e => !IsDlcGatedPrefab(e))
+                .Select(e => new { Entity = e, Name = GetPrefabName(e) })
+                .FirstOrDefault(x =>
+                    !string.IsNullOrWhiteSpace(x.Name) &&
+                    isSuitableName(x.Name) &&
+                    (x.Name.Equals(prefabName, StringComparison.OrdinalIgnoreCase) || PrefabNameMatches(x.Name, prefabName)));
+
+            if (match == null)
+                return false;
+
+            prefabEntity = match.Entity;
+            return true;
+        }
+
+        private static bool PrefabNameMatches(string prefabName, string expectedName)
+        {
+            if (string.IsNullOrWhiteSpace(prefabName) || string.IsNullOrWhiteSpace(expectedName))
+                return false;
+
+            var actual = NormalizePrefabName(prefabName);
+            var expected = NormalizePrefabName(expectedName);
+            if (actual == expected)
+                return true;
+
+            actual = NormalizePrefabName(prefabName, true);
+            expected = NormalizePrefabName(expectedName, true);
+            if (actual == expected)
+                return true;
+
+            return actual.Contains(expected) || expected.Contains(actual);
+        }
+
+        private static string NormalizePrefabName(string value, bool stripDigits = false)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var chars = value
+                .Where(c => char.IsLetterOrDigit(c) && (!stripDigits || !char.IsDigit(c)))
+                .Select(char.ToLowerInvariant)
+                .ToArray();
+            return new string(chars);
+        }
+
+        private string GetPrefabName(Entity entity)
+        {
+            if (entity == Entity.Null)
+                return string.Empty;
+
+            var name = EntityManager.GetName(entity);
+            if (!string.IsNullOrWhiteSpace(name))
+                return name;
+
+            if (_prefabSystem != null)
+            {
+                if (_prefabSystem.TryGetPrefab<PrefabBase>(entity, out var prefab) && prefab != null)
+                    return prefab.name;
+
+                if (_prefabSystem.TryGetPrefab<NetPrefab>(entity, out var netPrefab) && netPrefab != null)
+                    return netPrefab.name;
+            }
+
+            return string.Empty;
+        }
+
+        private PrefabBase GetPrefabBase(Entity entity)
+        {
+            if (entity == Entity.Null || _prefabSystem == null)
+                return null;
+
+            return _prefabSystem.TryGetPrefab<PrefabBase>(entity, out var prefab) ? prefab : null;
+        }
+
+        private bool HasRoundaboutComposition(Entity entity)
+        {
+            if (!EntityManager.Exists(entity) || !EntityManager.HasComponent<NetObjectData>(entity))
+                return false;
+
+            var netObjectData = EntityManager.GetComponentData<NetObjectData>(entity);
+            return netObjectData.m_CompositionFlags.m_General.HasFlag(CompositionFlags.General.Roundabout);
         }
 
         private static PrefabLaneBucket ParseLaneBucket(string value)
@@ -2588,6 +3299,69 @@ namespace cs2_osm_importer
             }
         }
 
+        private static bool IsSuitableRoundaboutPrefabName(string prefabName)
+        {
+            if (string.IsNullOrWhiteSpace(prefabName))
+                return false;
+
+            var lower = prefabName.ToLowerInvariant();
+            return lower.Contains("roundabout") &&
+                   !lower.Contains("interchange") &&
+                   !lower.Contains("teardrop");
+        }
+
+        private static IEnumerable<string> GetPreferredRoundaboutPrefabNames(OsmWay way)
+        {
+            var diameter = GetWayDiameterMeters(way);
+            if (diameter <= 0f)
+                diameter = GetWayLengthEstimate(way) * 0.25f;
+
+            if (diameter <= 28f)
+                return new[] { "SmallRoundabout01", "SmallRoundabout02", "SmallRoundabout03", "SmallRoundabout04" };
+
+            if (diameter <= 45f)
+                return new[] { "MediumRoundabout01", "MediumRoundabout02", "MediumRoundabout03", "MediumRoundabout04" };
+
+            if (diameter <= 70f)
+                return new[] { "LargeRoundabout01", "LargeRoundabout02", "LargeRoundabout03", "LargeRoundabout04", "LargeRoundabout05", "LargeRoundabout06", "LargeRoundabout07", "LargeRoundabout08", "LargeRoundabout09", "LargeRoundabout10" };
+
+            return new[] { "XLRoundabout01", "XLRoundabout02", "XLRoundabout03", "XLRoundabout04", "XLRoundabout05", "XLRoundabout06", "XLRoundabout07", "XLRoundabout08", "XLRoundabout09", "XLRoundabout10" };
+        }
+
+        private static float GetWayDiameterMeters(OsmWay way)
+        {
+            if (way == null || way.Points == null || way.Points.Count < 2)
+                return 0f;
+
+            var minX = way.Points[0].x;
+            var maxX = way.Points[0].x;
+            var minZ = way.Points[0].z;
+            var maxZ = way.Points[0].z;
+
+            for (var i = 1; i < way.Points.Count; i++)
+            {
+                var p = way.Points[i];
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.z < minZ) minZ = p.z;
+                if (p.z > maxZ) maxZ = p.z;
+            }
+
+            return Math.Max(maxX - minX, maxZ - minZ);
+        }
+
+        private static float GetWayLengthEstimate(OsmWay way)
+        {
+            if (way == null || way.Points == null || way.Points.Count < 2)
+                return 0f;
+
+            var length = 0f;
+            for (var i = 1; i < way.Points.Count; i++)
+                length += math.distance(way.Points[i - 1], way.Points[i]);
+
+            return length;
+        }
+
         private static bool IsTrackLikeHighwayType(string highwayType)
         {
             switch ((highwayType ?? string.Empty).ToLowerInvariant())
@@ -2653,6 +3427,9 @@ namespace cs2_osm_importer
 
             if (_prefabSystem.TryGetPrefab<NetPrefab>(prefabEntity, out var prefab) && prefab != null)
                 return prefab.name;
+
+            if (_prefabSystem.TryGetPrefab<PrefabBase>(prefabEntity, out var basePrefab) && basePrefab != null)
+                return basePrefab.name;
 
             return $"{prefabEntity.Index}:{prefabEntity.Version}";
         }
@@ -2720,13 +3497,15 @@ namespace cs2_osm_importer
             return order;
         }
 
-        private List<OsmWay> GetWaysForHighwayType(string highwayType)
+        private List<OsmWay> GetWaysForHighwayType(string highwayType, bool includeRoundabouts = true, bool includeRoundaboutConnectors = false)
         {
             if (_document == null || _document.Ways.Count == 0)
                 return new List<OsmWay>();
 
             return _document.Ways
-                .Where(way => string.Equals(way.Highway, highwayType, StringComparison.OrdinalIgnoreCase))
+                .Where(way => string.Equals(way.Highway, highwayType, StringComparison.OrdinalIgnoreCase) &&
+                              (includeRoundabouts || !way.IsRoundabout) &&
+                              (includeRoundaboutConnectors || !_roundaboutConnectorWayIds.Contains(way.Id)))
                 .ToList();
         }
 
