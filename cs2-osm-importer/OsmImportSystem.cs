@@ -128,6 +128,7 @@ namespace cs2_osm_importer
         private bool _loggedRoundaboutPrefabDiagnostics;
         private bool _loggedRoundaboutRoadPrefabDiagnostics;
         private bool _hasTerrainHeightData;
+        private bool _roadServiceUpgradesApplied;
         private TerrainHeightData _terrainHeightData;
         private struct QueuedSegmentInfo
         {
@@ -140,6 +141,7 @@ namespace cs2_osm_importer
             public string Name;
             public int Lanes;
             public bool IsRoundabout;
+            public OsmWay Way;
             public float3 MidPoint => (StartPos + EndPos) * 0.5f;
         }
 
@@ -148,6 +150,7 @@ namespace cs2_osm_importer
         private List<OsmWay> _roundaboutWays = new List<OsmWay>();
         private List<OsmWay> _roundaboutConnectorWays = new List<OsmWay>();
         private HashSet<long> _roundaboutConnectorWayIds = new HashSet<long>();
+        private Dictionary<Entity, OsmWay> _generatedEdgeWays = new Dictionary<Entity, OsmWay>();
         private Dictionary<string, int> _typeWayCounts = new Dictionary<string, int>();
         private int _totalGenerationWays;
         private bool _roadNamesApplied;
@@ -170,6 +173,36 @@ namespace cs2_osm_importer
         private static string LF(string key, string fallback, params object[] args) => OsmLocalization.F(key, fallback, args);
 
         private static string DisplayHighwayType(string highwayType) => OsmLocalization.GetRoadTypeName(highwayType, highwayType);
+
+        private static void LogOsmRoadFeatureSummary(OsmDocument document)
+        {
+            if (document?.Ways == null || document.Ways.Count == 0)
+                return;
+
+            var bikeLaneWays = document.Ways.Count(way => way.HasBikeLanes);
+            var treeWays = document.Ways.Count(way => way.HasRoadsideTrees);
+            var restrictedLaneWays = document.Ways.Count(way => way.HasRestrictedLanes);
+            var turnRestrictionWays = document.Ways.Count(way => way.HasTurnRestrictions);
+            var crosswalkNodes = document.Ways.Sum(way => way.Crosswalks.Select(feature => feature.NodeId).Distinct().Count());
+            var stopSignNodes = document.Ways.Sum(way => way.StopSigns.Select(feature => feature.NodeId).Distinct().Count());
+            var trafficLightNodes = document.Ways.Sum(way => way.TrafficLights.Select(feature => feature.NodeId).Distinct().Count());
+
+            Mod.log.Info(
+                $"Loaded OSM road feature data: bikeLanes={bikeLaneWays} ways, roadsideTrees={treeWays} ways, " +
+                $"restrictedBusLanes={restrictedLaneWays} ways, turnRestrictions={turnRestrictionWays} ways, " +
+                $"crosswalkNodes={crosswalkNodes}, stopSignNodes={stopSignNodes}, trafficLightNodes={trafficLightNodes}.");
+        }
+
+        private static string DescribeGenerateFeatureSettings(OsmGenerateOptions options)
+        {
+            if (options == null)
+                return "all enabled";
+
+            return $"bikeLanes={options.GenerateBikeLanes}, roadsideTrees={options.GenerateRoadsideTrees}, " +
+                   $"turnRestrictions={options.GenerateTurnRestrictions}, crosswalks={options.GenerateCrosswalks}, " +
+                   $"stopSigns={options.GenerateStopSigns}, trafficLights={options.GenerateTrafficLights}, " +
+                   $"restrictedBusLanes={options.GenerateRestrictedLanes}";
+        }
 
         private string BuildGenerationDetailStatus()
         {
@@ -273,7 +306,7 @@ namespace cs2_osm_importer
             IsImporting = true;
             _phase = WorkPhase.QueueDefinitions;
             SetStatus(L("OsmImporter.Status.GeneratingPrepared", "Preparing road generation..."));
-            Mod.log.Info($"Queued OSM road generation for selected types: {SelectedTypesLabel(options)}");
+            Mod.log.Info($"Queued OSM road generation for selected types: {SelectedTypesLabel(options)}. Feature settings: {DescribeGenerateFeatureSettings(options)}");
             PrepareGeneration();
             return true;
         }
@@ -323,6 +356,7 @@ namespace cs2_osm_importer
                 Mod.log.Info($"Parsed {_document.NodeCount} OSM nodes and {_document.Ways.Count} supported highway ways");
                 if (_document.InferredLaneCount > 0)
                     Mod.log.Info($"Normalized {_document.InferredLaneCount} contiguous ways to inherit lane counts from connected segments.");
+                LogOsmRoadFeatureSummary(_document);
                 LogImportedBounds(_document);
 
                 if (_document.Ways.Count == 0)
@@ -400,6 +434,7 @@ namespace cs2_osm_importer
                 _baselinePillarEntities = QueryPillarEntities().ToHashSet();
                 Mod.log.Info($"Baseline pillar entity count: {_baselinePillarEntities.Count}");
                 _generatedEdgeEntities.Clear();
+                _generatedEdgeWays.Clear();
                 _queuedSegmentInfos.Clear();
                 _roundaboutWays = _document?.Ways?.Where(way => way.IsRoundabout).ToList() ?? new List<OsmWay>();
                 Mod.log.Info($"Detected {_roundaboutWays.Count} roundabout ways in the current import document.");
@@ -426,6 +461,7 @@ namespace cs2_osm_importer
                     _totalGenerationWays += count;
                 }
                 _roadNamesApplied = false;
+                _roadServiceUpgradesApplied = false;
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
@@ -501,7 +537,8 @@ namespace cs2_osm_importer
                                     EndTerrainHeight = terrainEnd,
                                     ElevationOffset = way.BaseElevationOffsetMeters,
                                     Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
-                                    Lanes = way.Lanes
+                                    Lanes = way.Lanes,
+                                    Way = way
                                 });
                             }
                             segmentsThisFrame++;
@@ -621,7 +658,8 @@ namespace cs2_osm_importer
                                 EndTerrainHeight = terrainEnd,
                                 ElevationOffset = way.BaseElevationOffsetMeters,
                                 Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
-                                Lanes = way.Lanes
+                                Lanes = way.Lanes,
+                                Way = way
                             });
                         }
 
@@ -739,6 +777,7 @@ namespace cs2_osm_importer
                     }
 
                     ApplyQueuedRoadNames();
+                    ApplyRoadServiceUpgrades();
                     var uniqueNames = _queuedSegmentInfos
                         .Select(i => i.Name)
                         .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -1459,6 +1498,7 @@ namespace cs2_osm_importer
                 Name = !string.IsNullOrWhiteSpace(way.Name) ? way.Name : (way.Ref ?? string.Empty),
                 Lanes = way.Lanes,
                 IsRoundabout = true,
+                Way = way,
             };
         }
 
@@ -1605,6 +1645,7 @@ namespace cs2_osm_importer
                 }
                 namedCount++;
                 _generatedEdgeEntities.Add(edgeEntity);
+                _generatedEdgeWays[edgeEntity] = _queuedSegmentInfos[bestIndex].Way;
             }
 
             _roadNamesApplied = true;
@@ -1616,6 +1657,217 @@ namespace cs2_osm_importer
 
             spatialIndex.Dispose();
             matchedSegments.Dispose();
+        }
+
+        private void ApplyRoadServiceUpgrades()
+        {
+            if (_roadServiceUpgradesApplied)
+                return;
+
+            _roadServiceUpgradesApplied = true;
+
+            if (_generatedEdgeWays.Count == 0)
+                return;
+
+            var edgeLookup = GetComponentLookup<Edge>(true);
+            var nodeLookup = GetComponentLookup<Node>(true);
+            var upgradedEdges = 0;
+            var upgradedNodes = 0;
+            var chunkEntities = new HashSet<Entity>();
+            var touchedNodes = new HashSet<Entity>();
+
+            foreach (var pair in _generatedEdgeWays)
+            {
+                var edgeEntity = pair.Key;
+                var way = pair.Value;
+                if (way == null || !EntityManager.Exists(edgeEntity) || !edgeLookup.HasComponent(edgeEntity))
+                    continue;
+
+                var flags = default(CompositionFlags);
+
+                if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateBikeLanes)
+                    AddSideFlags(ref flags, way.BikeLaneSide, CompositionFlags.Side.SecondaryLane);
+
+                if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateRoadsideTrees)
+                    AddSideFlags(ref flags, way.RoadsideTreeSide, CompositionFlags.Side.PrimaryBeautification);
+
+                if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateRestrictedLanes)
+                    AddSideFlags(ref flags, way.RestrictedLaneSide, CompositionFlags.Side.PrimaryLane);
+
+                if (HasAnyFlags(flags) && MergeUpgradedFlags(edgeEntity, flags))
+                {
+                    upgradedEdges++;
+                    chunkEntities.Add(edgeEntity);
+                }
+
+                var edge = edgeLookup[edgeEntity];
+                if (!nodeLookup.HasComponent(edge.m_Start) || !nodeLookup.HasComponent(edge.m_End))
+                    continue;
+
+                ApplyNodeRoadServiceUpgrades(way, edge.m_Start, nodeLookup[edge.m_Start].m_Position, touchedNodes, chunkEntities, ref upgradedNodes);
+                ApplyNodeRoadServiceUpgrades(way, edge.m_End, nodeLookup[edge.m_End].m_Position, touchedNodes, chunkEntities, ref upgradedNodes);
+            }
+
+            MarkChunksDirty(chunkEntities);
+            Mod.log.Info($"Applied road service upgrade flags to {upgradedEdges} generated edges and {upgradedNodes} generated nodes.");
+        }
+
+        private void ApplyNodeRoadServiceUpgrades(
+            OsmWay way,
+            Entity nodeEntity,
+            float3 nodePosition,
+            HashSet<Entity> touchedNodes,
+            HashSet<Entity> chunkEntities,
+            ref int upgradedNodes)
+        {
+            if (way == null || nodeEntity == Entity.Null || !EntityManager.Exists(nodeEntity))
+                return;
+
+            var flags = default(CompositionFlags);
+
+            if ((_activeGenerateOptions == null || _activeGenerateOptions.GenerateCrosswalks) &&
+                HasNearbyNodeFeature(way.Crosswalks, nodePosition, 6f))
+            {
+                flags.m_General |= CompositionFlags.General.Crosswalk;
+                flags.m_Left |= CompositionFlags.Side.AddCrosswalk;
+                flags.m_Right |= CompositionFlags.Side.AddCrosswalk;
+            }
+
+            if ((_activeGenerateOptions == null || _activeGenerateOptions.GenerateStopSigns) &&
+                HasNearbyNodeFeature(way.StopSigns, nodePosition, 6f))
+            {
+                flags.m_General |= CompositionFlags.General.AllWayStop;
+            }
+
+            if ((_activeGenerateOptions == null || _activeGenerateOptions.GenerateTrafficLights) &&
+                HasNearbyNodeFeature(way.TrafficLights, nodePosition, 6f))
+            {
+                flags.m_General |= CompositionFlags.General.TrafficLights;
+            }
+
+            if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateTurnRestrictions)
+                AddTurnRestrictionFlags(ref flags, way.TurnRestrictions, nodePosition);
+
+            if (!HasAnyFlags(flags))
+                return;
+
+            if (MergeUpgradedFlags(nodeEntity, flags) && touchedNodes.Add(nodeEntity))
+            {
+                upgradedNodes++;
+                chunkEntities.Add(nodeEntity);
+            }
+        }
+
+        private bool MergeUpgradedFlags(Entity entity, CompositionFlags flags)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity) || !HasAnyFlags(flags))
+                return false;
+
+            var currentFlags = EntityManager.HasComponent<Upgraded>(entity)
+                ? EntityManager.GetComponentData<Upgraded>(entity).m_Flags
+                : default;
+
+            var merged = currentFlags;
+            merged.m_General |= flags.m_General;
+            merged.m_Left |= flags.m_Left;
+            merged.m_Right |= flags.m_Right;
+
+            if (merged.m_General == currentFlags.m_General &&
+                merged.m_Left == currentFlags.m_Left &&
+                merged.m_Right == currentFlags.m_Right)
+                return false;
+
+            if (EntityManager.HasComponent<Upgraded>(entity))
+                EntityManager.SetComponentData(entity, new Upgraded { m_Flags = merged });
+            else
+                EntityManager.AddComponentData(entity, new Upgraded { m_Flags = merged });
+
+            if (EntityManager.HasComponent<Updated>(entity))
+                EntityManager.SetComponentData(entity, new Updated());
+            else
+                EntityManager.AddComponentData(entity, new Updated());
+
+            return true;
+        }
+
+        private static void AddSideFlags(ref CompositionFlags flags, OsmRoadFeatureSide side, CompositionFlags.Side sideFlag)
+        {
+            switch (side)
+            {
+                case OsmRoadFeatureSide.Left:
+                    flags.m_Left |= sideFlag;
+                    break;
+                case OsmRoadFeatureSide.Right:
+                    flags.m_Right |= sideFlag;
+                    break;
+                case OsmRoadFeatureSide.Both:
+                    flags.m_Left |= sideFlag;
+                    flags.m_Right |= sideFlag;
+                    break;
+            }
+        }
+
+        private static bool HasAnyFlags(CompositionFlags flags)
+        {
+            return !flags.m_General.Equals(default(CompositionFlags.General)) ||
+                   !flags.m_Left.Equals(default(CompositionFlags.Side)) ||
+                   !flags.m_Right.Equals(default(CompositionFlags.Side));
+        }
+
+        private static bool HasNearbyNodeFeature(List<OsmRoadNodeFeature> features, float3 nodePosition, float maxDistanceMeters)
+        {
+            if (features == null || features.Count == 0)
+                return false;
+
+            var maxDistanceSq = maxDistanceMeters * maxDistanceMeters;
+            foreach (var feature in features)
+            {
+                if (feature == null)
+                    continue;
+
+                if (math.distancesq(feature.Position.xz, nodePosition.xz) <= maxDistanceSq)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void AddTurnRestrictionFlags(ref CompositionFlags flags, List<OsmTurnRestriction> restrictions, float3 nodePosition)
+        {
+            if (restrictions == null || restrictions.Count == 0)
+                return;
+
+            const float maxDistanceMeters = 8f;
+            var maxDistanceSq = maxDistanceMeters * maxDistanceMeters;
+            foreach (var restriction in restrictions)
+            {
+                if (restriction == null)
+                    continue;
+
+                if (restriction.ViaNodeId == 0)
+                    continue;
+
+                if (math.distancesq(restriction.ViaPosition.xz, nodePosition.xz) > maxDistanceSq)
+                    continue;
+
+                if (restriction.ForbidLeftTurn || restriction.ForbidUTurn)
+                {
+                    flags.m_Left |= CompositionFlags.Side.ForbidLeftTurn;
+                    flags.m_Right |= CompositionFlags.Side.ForbidLeftTurn;
+                }
+
+                if (restriction.ForbidRightTurn || restriction.ForbidUTurn)
+                {
+                    flags.m_Left |= CompositionFlags.Side.ForbidRightTurn;
+                    flags.m_Right |= CompositionFlags.Side.ForbidRightTurn;
+                }
+
+                if (restriction.ForbidStraight)
+                {
+                    flags.m_Left |= CompositionFlags.Side.ForbidStraight;
+                    flags.m_Right |= CompositionFlags.Side.ForbidStraight;
+                }
+            }
         }
 
         internal void ApplyPendingNames()
@@ -2210,7 +2462,7 @@ namespace cs2_osm_importer
                 return false;
 
             var candidateSource = GetAnyRoundaboutPrefabCandidates().ToList();
-            var matchedRule = rules.FirstOrDefault(rule => rule != null && rule.Matches(way));
+            var matchedRule = rules.FirstOrDefault(rule => rule != null && rule.Matches(way, _activeGenerateOptions));
             if (matchedRule == null)
                 matchedRule = rules.FirstOrDefault(rule => rule != null && !string.IsNullOrWhiteSpace(rule.PrefabName));
 
@@ -2438,7 +2690,7 @@ namespace cs2_osm_importer
             var bestRuleScore = -1;
             foreach (var rule in rules)
             {
-                if (!rule.Matches(way))
+                if (!rule.Matches(way, _activeGenerateOptions))
                     continue;
 
                 var score = rule.SpecificityScore();
@@ -2754,9 +3006,23 @@ namespace cs2_osm_importer
 
             public OneWayBucket OneWay { get; set; }
 
+            public TriState BikeLanes { get; set; }
+
+            public TriState RoadsideTrees { get; set; }
+
+            public TriState TurnRestrictions { get; set; }
+
+            public TriState Crosswalks { get; set; }
+
+            public TriState StopSigns { get; set; }
+
+            public TriState TrafficLights { get; set; }
+
+            public TriState RestrictedLanes { get; set; }
+
             public string PrefabName { get; set; } = string.Empty;
 
-            public bool Matches(OsmWay way)
+            public bool Matches(OsmWay way, OsmGenerateOptions options)
             {
                 if (way == null)
                     return false;
@@ -2770,7 +3036,14 @@ namespace cs2_osm_importer
                        MatchesParkingStyle(way.ParkingStyle) &&
                        MatchesTriState(Bridge, way.IsBridge) &&
                        MatchesTriState(Tunnel, way.IsTunnel) &&
-                        MatchesOneWay(OneWay, way.OneWayDirection);
+                       MatchesOneWay(OneWay, way.OneWayDirection) &&
+                       MatchesTriState(BikeLanes, (options == null || options.GenerateBikeLanes) && way.HasBikeLanes) &&
+                       MatchesTriState(RoadsideTrees, (options == null || options.GenerateRoadsideTrees) && way.HasRoadsideTrees) &&
+                       MatchesTriState(TurnRestrictions, (options == null || options.GenerateTurnRestrictions) && way.HasTurnRestrictions) &&
+                       MatchesTriState(Crosswalks, (options == null || options.GenerateCrosswalks) && way.Crosswalks.Count > 0) &&
+                       MatchesTriState(StopSigns, (options == null || options.GenerateStopSigns) && way.StopSigns.Count > 0) &&
+                       MatchesTriState(TrafficLights, (options == null || options.GenerateTrafficLights) && way.TrafficLights.Count > 0) &&
+                       MatchesTriState(RestrictedLanes, (options == null || options.GenerateRestrictedLanes) && way.HasRestrictedLanes);
             }
 
             private bool MatchesLane(int lanes)
@@ -2810,6 +3083,13 @@ namespace cs2_osm_importer
                 if (Bridge != TriState.Any) score++;
                 if (Tunnel != TriState.Any) score++;
                 if (OneWay != OneWayBucket.Any) score++;
+                if (BikeLanes != TriState.Any) score++;
+                if (RoadsideTrees != TriState.Any) score++;
+                if (TurnRestrictions != TriState.Any) score++;
+                if (Crosswalks != TriState.Any) score++;
+                if (StopSigns != TriState.Any) score++;
+                if (TrafficLights != TriState.Any) score++;
+                if (RestrictedLanes != TriState.Any) score++;
                 return score;
             }
 
@@ -3019,6 +3299,13 @@ namespace cs2_osm_importer
                     Bridge = ParseTriState(dict.Bridge),
                     Tunnel = ParseTriState(dict.Tunnel),
                     OneWay = ParseOneWayBucket(dict.OneWay),
+                    BikeLanes = ParseTriState(dict.BikeLanes),
+                    RoadsideTrees = ParseTriState(dict.RoadsideTrees),
+                    TurnRestrictions = ParseTriState(dict.TurnRestrictions),
+                    Crosswalks = ParseTriState(dict.Crosswalks),
+                    StopSigns = ParseTriState(dict.StopSigns),
+                    TrafficLights = ParseTriState(dict.TrafficLights),
+                    RestrictedLanes = ParseTriState(dict.RestrictedLanes),
                     PrefabName = prefabName,
                 });
             }
@@ -3078,6 +3365,27 @@ namespace cs2_osm_importer
 
             [DataMember(Name = "oneway")]
             public string OneWay { get; set; }
+
+            [DataMember(Name = "bikeLanes")]
+            public string BikeLanes { get; set; }
+
+            [DataMember(Name = "roadsideTrees")]
+            public string RoadsideTrees { get; set; }
+
+            [DataMember(Name = "turnRestrictions")]
+            public string TurnRestrictions { get; set; }
+
+            [DataMember(Name = "crosswalks")]
+            public string Crosswalks { get; set; }
+
+            [DataMember(Name = "stopSigns")]
+            public string StopSigns { get; set; }
+
+            [DataMember(Name = "trafficLights")]
+            public string TrafficLights { get; set; }
+
+            [DataMember(Name = "restrictedLanes")]
+            public string RestrictedLanes { get; set; }
 
             [DataMember(Name = "prefab")]
             public string Prefab { get; set; }

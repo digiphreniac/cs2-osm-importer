@@ -22,6 +22,7 @@ namespace cs2_osm_importer
             public double Lon;
             public double X;
             public double Y;
+            public Dictionary<string, string> Tags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         public static OsmDocument Load(
@@ -58,6 +59,7 @@ namespace cs2_osm_importer
 
             var supportedWays = new List<XmlElement>();
             var roadNodeIds = new HashSet<long>();
+            Dictionary<long, List<OsmTurnRestriction>> turnRestrictionsByWayId;
 
             foreach (XmlElement wayElement in wayElements)
             {
@@ -128,10 +130,12 @@ namespace cs2_osm_importer
                 document.CenterLon = center.Lon;
             }
 
+            turnRestrictionsByWayId = ReadTurnRestrictions(xml, nodes, options, sampleHeight);
+
             var parsedWays = new List<OsmWay>();
             foreach (var wayElement in supportedWays)
             {
-                if (TryReadRoadWay(wayElement, nodes, options, sampleHeight, worldOffset, out var way))
+                if (TryReadRoadWay(wayElement, nodes, options, sampleHeight, worldOffset, turnRestrictionsByWayId, out var way))
                     parsedWays.Add(way);
             }
 
@@ -166,14 +170,143 @@ namespace cs2_osm_importer
             foreach (XmlElement nodeElement in nodeElements)
             {
                 var id = ReadLong(nodeElement, "id");
-                nodes[id] = new GeoNode
+                var node = new GeoNode
                 {
                     Lat = ReadDouble(nodeElement, "lat"),
                     Lon = ReadDouble(nodeElement, "lon")
                 };
+
+                var tags = nodeElement.SelectNodes("tag");
+                if (tags != null)
+                {
+                    foreach (XmlElement tag in tags)
+                        node.Tags[tag.GetAttribute("k")] = tag.GetAttribute("v");
+                }
+
+                nodes[id] = node;
             }
 
             return nodes;
+        }
+
+        private static Dictionary<long, List<OsmTurnRestriction>> ReadTurnRestrictions(
+            XmlDocument xml,
+            Dictionary<long, GeoNode> nodes,
+            OsmImportOptions options,
+            System.Func<float3, float> sampleHeight)
+        {
+            var result = new Dictionary<long, List<OsmTurnRestriction>>();
+            var relations = xml.SelectNodes("/osm/relation");
+            if (relations == null)
+                return result;
+
+            foreach (XmlElement relation in relations)
+            {
+                var tags = relation.SelectNodes("tag");
+                var isRestriction = false;
+                var restriction = string.Empty;
+                if (tags != null)
+                {
+                    foreach (XmlElement tag in tags)
+                    {
+                        var key = tag.GetAttribute("k");
+                        var value = tag.GetAttribute("v");
+                        if (key == "restriction")
+                            restriction = value ?? string.Empty;
+
+                        if ((key == "type" && value == "restriction") ||
+                            (key == "restriction" && value.StartsWith("no_", StringComparison.OrdinalIgnoreCase)) ||
+                            (key == "restriction" && value.StartsWith("only_", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            isRestriction = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!isRestriction)
+                    continue;
+
+                var members = relation.SelectNodes("member");
+                if (members == null)
+                    continue;
+
+                var viaNodeId = 0L;
+                var wayIds = new List<long>();
+                foreach (XmlElement member in members)
+                {
+                    var type = member.GetAttribute("type");
+                    var role = member.GetAttribute("role");
+                    if (string.Equals(type, "node", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(role, "via", StringComparison.OrdinalIgnoreCase))
+                    {
+                        viaNodeId = ReadLong(member, "ref");
+                        continue;
+                    }
+
+                    if (!string.Equals(type, "way", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (string.Equals(role, "from", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(role, "to", StringComparison.OrdinalIgnoreCase))
+                        wayIds.Add(ReadLong(member, "ref"));
+                }
+
+                if (!TryCreateTurnRestriction(restriction, viaNodeId, nodes, options, sampleHeight, out var turnRestriction))
+                    continue;
+
+                foreach (var wayId in wayIds)
+                {
+                    if (!result.TryGetValue(wayId, out var list))
+                    {
+                        list = new List<OsmTurnRestriction>();
+                        result[wayId] = list;
+                    }
+
+                    list.Add(turnRestriction);
+                }
+            }
+
+            return result;
+        }
+
+        private static bool TryCreateTurnRestriction(
+            string restriction,
+            long viaNodeId,
+            Dictionary<long, GeoNode> nodes,
+            OsmImportOptions options,
+            System.Func<float3, float> sampleHeight,
+            out OsmTurnRestriction turnRestriction)
+        {
+            turnRestriction = null;
+            var normalized = (restriction ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(normalized))
+                return false;
+
+            var parsed = new OsmTurnRestriction
+            {
+                ViaNodeId = viaNodeId,
+                ForbidLeftTurn = normalized == "no_left_turn" || normalized == "only_right_turn" || normalized == "only_straight_on",
+                ForbidRightTurn = normalized == "no_right_turn" || normalized == "only_left_turn" || normalized == "only_straight_on",
+                ForbidStraight = normalized == "no_straight_on" || normalized == "only_left_turn" || normalized == "only_right_turn",
+                ForbidUTurn = normalized == "no_u_turn",
+            };
+
+            if (!parsed.ForbidLeftTurn && !parsed.ForbidRightTurn && !parsed.ForbidStraight && !parsed.ForbidUTurn)
+                return false;
+
+            if (viaNodeId != 0 && nodes != null && nodes.TryGetValue(viaNodeId, out var viaNode))
+            {
+                var viaPosition = new float3(
+                    (float)(viaNode.X * options.ScaleFactor),
+                    0f,
+                    (float)(viaNode.Y * options.ScaleFactor));
+                viaPosition.y = sampleHeight != null ? sampleHeight(viaPosition) : options.ElevationMeters;
+                parsed.ViaPosition = viaPosition;
+            }
+
+            turnRestriction = parsed;
+            return true;
         }
 
         private static bool TryReadRoadWay(
@@ -182,6 +315,7 @@ namespace cs2_osm_importer
             OsmImportOptions options,
             System.Func<float3, float> sampleHeight,
             float3 worldOffset,
+            Dictionary<long, List<OsmTurnRestriction>> turnRestrictionsByWayId,
             out OsmWay way)
         {
             way = new OsmWay { Id = ReadLong(wayElement, "id") };
@@ -209,6 +343,13 @@ namespace cs2_osm_importer
             var parkingLeftTag = string.Empty;
             var parkingRightTag = string.Empty;
             var parkingBothTag = string.Empty;
+            var hasBikeLanes = false;
+            var hasRoadsideTrees = false;
+            var bikeLaneSide = OsmRoadFeatureSide.None;
+            var roadsideTreeSide = OsmRoadFeatureSide.None;
+            var hasDesignatedBusLanes = false;
+            var designatedBusLaneSide = OsmRoadFeatureSide.None;
+            var hasBroadBusDesignation = false;
             var tags = wayElement.SelectNodes("tag");
 
             if (tags != null)
@@ -292,6 +433,25 @@ namespace cs2_osm_importer
                         else if (key.EndsWith(":both", StringComparison.OrdinalIgnoreCase))
                             parkingBothTag = value;
                     }
+                    else if (TryParseBikeLaneTag(key, value, out var parsedBikeLaneSide))
+                    {
+                        hasBikeLanes = true;
+                        bikeLaneSide = MergeRoadFeatureSide(bikeLaneSide, parsedBikeLaneSide);
+                    }
+                    else if (IsRoadsideTreeTag(key, value))
+                    {
+                        hasRoadsideTrees = true;
+                        roadsideTreeSide = MergeRoadFeatureSide(roadsideTreeSide, ParseRoadFeatureSide(key));
+                    }
+                    else if (TryParseDesignatedBusLaneTag(key, value, out var parsedBusLaneSide))
+                    {
+                        hasDesignatedBusLanes = true;
+                        designatedBusLaneSide = MergeRoadFeatureSide(designatedBusLaneSide, parsedBusLaneSide);
+                    }
+                    else if (IsBroadBusDesignationTag(key, value))
+                    {
+                        hasBroadBusDesignation = true;
+                    }
                     else if (key == "area" && value == "yes")
                         isArea = true;
                 }
@@ -357,6 +517,17 @@ namespace cs2_osm_importer
             ResolveParkingTags(parkingLeftTag, parkingRightTag, parkingBothTag, out var parkingSide, out var parkingStyle);
             way.ParkingSide = parkingSide;
             way.ParkingStyle = parkingStyle;
+            way.HasBikeLanes = hasBikeLanes;
+            way.HasRoadsideTrees = hasRoadsideTrees;
+            way.HasTurnRestrictions = turnRestrictionsByWayId != null && turnRestrictionsByWayId.ContainsKey(way.Id);
+            way.HasRestrictedLanes = hasDesignatedBusLanes || hasBroadBusDesignation;
+            way.BikeLaneSide = NormalizeDetectedSide(bikeLaneSide, way.HasBikeLanes);
+            way.RoadsideTreeSide = NormalizeDetectedSide(roadsideTreeSide, way.HasRoadsideTrees);
+            way.RestrictedLaneSide = hasDesignatedBusLanes
+                ? NormalizeDetectedSide(designatedBusLaneSide, true)
+                : NormalizeDetectedSide(hasBroadBusDesignation ? OsmRoadFeatureSide.Both : OsmRoadFeatureSide.None, way.HasRestrictedLanes);
+            if (turnRestrictionsByWayId != null && turnRestrictionsByWayId.TryGetValue(way.Id, out var restrictions))
+                way.TurnRestrictions.AddRange(restrictions);
             way.TerrainHeights.Clear();
 
             var nds = wayElement.SelectNodes("nd");
@@ -379,6 +550,8 @@ namespace cs2_osm_importer
                 currentPoint.y = sampleHeight != null
                     ? sampleHeight(currentPoint)
                     : options.ElevationMeters;
+
+                AddNodeFeatureLocations(way, nodeId, node, currentPoint);
 
                 if (sampleHeight != null && way.Points.Count > 0)
                 {
@@ -414,6 +587,21 @@ namespace cs2_osm_importer
                 }
             }
             return way.Points.Count >= 2;
+        }
+
+        private static void AddNodeFeatureLocations(OsmWay way, long nodeId, GeoNode node, float3 position)
+        {
+            if (way == null || node == null || node.Tags == null || node.Tags.Count == 0)
+                return;
+
+            if (IsCrosswalkNode(node.Tags))
+                way.Crosswalks.Add(new OsmRoadNodeFeature { NodeId = nodeId, Position = position });
+
+            if (IsStopSignNode(node.Tags))
+                way.StopSigns.Add(new OsmRoadNodeFeature { NodeId = nodeId, Position = position });
+
+            if (IsTrafficLightNode(node.Tags))
+                way.TrafficLights.Add(new OsmRoadNodeFeature { NodeId = nodeId, Position = position });
         }
 
         private static List<OsmWay> AttachSidewalkWays(List<OsmWay> ways, out int attachedCount)
@@ -846,6 +1034,259 @@ namespace cs2_osm_importer
             }
         }
 
+        private static bool TryParseBikeLaneTag(string key, string value, out OsmRoadFeatureSide side)
+        {
+            side = OsmRoadFeatureSide.None;
+            key = (key ?? string.Empty).Trim().ToLowerInvariant();
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(key) || IsFalsey(value))
+                return false;
+
+            if (key == "bicycle" && value == "designated")
+            {
+                side = OsmRoadFeatureSide.Both;
+                return true;
+            }
+
+            if (IsCyclewaySideKey(key) && IsBicycleLaneValue(value))
+            {
+                side = ParseRoadFeatureSide(key);
+                return true;
+            }
+
+            if ((key == "cycleway:lanes" || key.StartsWith("cycleway:lanes:", StringComparison.Ordinal)) &&
+                TryParseBicycleLaneSide(value, IsBicycleLaneValue, out side))
+            {
+                return true;
+            }
+
+            if ((key == "bicycle:lanes" || key.StartsWith("bicycle:lanes:", StringComparison.Ordinal)) &&
+                TryParseBicycleLaneSide(value, laneValue => laneValue == "designated", out side))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsCyclewaySideKey(string key)
+        {
+            return key == "cycleway" ||
+                   key == "cycleway:left" ||
+                   key == "cycleway:right" ||
+                   key == "cycleway:both";
+        }
+
+        private static bool IsBicycleLaneValue(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "lane":
+                case "opposite_lane":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryParseBicycleLaneSide(
+            string value,
+            System.Func<string, bool> isLaneValue,
+            out OsmRoadFeatureSide side)
+        {
+            side = OsmRoadFeatureSide.None;
+            if (isLaneValue == null)
+                return false;
+
+            var laneValues = (value ?? string.Empty)
+                .Split('|')
+                .Select(part => (part ?? string.Empty).Trim().ToLowerInvariant())
+                .ToList();
+
+            if (laneValues.Count == 0)
+                return false;
+
+            var hasLane = false;
+            var hasLeft = false;
+            var hasRight = false;
+
+            for (var i = 0; i < laneValues.Count; i++)
+            {
+                if (!isLaneValue(laneValues[i]))
+                    continue;
+
+                hasLane = true;
+                if (i == 0)
+                    hasLeft = true;
+                if (i == laneValues.Count - 1 || (i > 0 && i < laneValues.Count - 1))
+                    hasRight = true;
+            }
+
+            if (!hasLane)
+                return false;
+
+            side = hasLeft && hasRight ? OsmRoadFeatureSide.Both :
+                   hasLeft ? OsmRoadFeatureSide.Left :
+                   OsmRoadFeatureSide.Right;
+            return true;
+        }
+
+        private static OsmRoadFeatureSide ParseRoadFeatureSide(string key)
+        {
+            key = (key ?? string.Empty).Trim().ToLowerInvariant();
+            if (key.Contains(":both"))
+                return OsmRoadFeatureSide.Both;
+            if (key.Contains(":left"))
+                return OsmRoadFeatureSide.Left;
+            if (key.Contains(":right"))
+                return OsmRoadFeatureSide.Right;
+            return OsmRoadFeatureSide.None;
+        }
+
+        private static OsmRoadFeatureSide MergeRoadFeatureSide(OsmRoadFeatureSide current, OsmRoadFeatureSide next)
+        {
+            if (next == OsmRoadFeatureSide.None)
+                return current;
+            if (current == OsmRoadFeatureSide.None)
+                return next;
+            if (current == next)
+                return current;
+            return OsmRoadFeatureSide.Both;
+        }
+
+        private static OsmRoadFeatureSide NormalizeDetectedSide(OsmRoadFeatureSide side, bool hasFeature)
+        {
+            if (!hasFeature)
+                return OsmRoadFeatureSide.None;
+            return side == OsmRoadFeatureSide.None ? OsmRoadFeatureSide.Both : side;
+        }
+
+        private static bool IsRoadsideTreeTag(string key, string value)
+        {
+            key = (key ?? string.Empty).Trim().ToLowerInvariant();
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(key) || IsFalsey(value))
+                return false;
+
+            return key == "tree_lined" ||
+                   key == "tree_lined:left" ||
+                   key == "tree_lined:right" ||
+                   key == "tree_lined:both" ||
+                   (key == "natural" && value == "tree_row");
+        }
+
+        private static bool IsBroadBusDesignationTag(string key, string value)
+        {
+            key = (key ?? string.Empty).Trim().ToLowerInvariant();
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            return key == "bus" && value == "designated";
+        }
+
+        private static bool TryParseDesignatedBusLaneTag(string key, string value, out OsmRoadFeatureSide side)
+        {
+            side = OsmRoadFeatureSide.None;
+            key = (key ?? string.Empty).Trim().ToLowerInvariant();
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(value))
+                return false;
+
+            if (key == "bus:lanes" || key.StartsWith("bus:lanes:", StringComparison.Ordinal))
+                return TryParseDesignatedBusLaneSide(value, out side);
+
+            return false;
+        }
+
+        private static bool TryParseDesignatedBusLaneSide(string value, out OsmRoadFeatureSide side)
+        {
+            side = OsmRoadFeatureSide.None;
+
+            var laneValues = (value ?? string.Empty)
+                .Split('|')
+                .Select(part => (part ?? string.Empty).Trim().ToLowerInvariant())
+                .ToList();
+
+            if (laneValues.Count == 0)
+                return false;
+
+            var hasDesignated = false;
+            var hasLeft = false;
+            var hasRight = false;
+
+            for (var i = 0; i < laneValues.Count; i++)
+            {
+                if (laneValues[i] != "designated")
+                    continue;
+
+                hasDesignated = true;
+                if (i == 0)
+                    hasLeft = true;
+                if (i == laneValues.Count - 1 || (i > 0 && i < laneValues.Count - 1))
+                    hasRight = true;
+            }
+
+            if (!hasDesignated)
+                return false;
+
+            side = hasLeft && hasRight ? OsmRoadFeatureSide.Both :
+                   hasLeft ? OsmRoadFeatureSide.Left :
+                   OsmRoadFeatureSide.Right;
+            return true;
+        }
+
+        private static bool IsCrosswalkNode(Dictionary<string, string> tags)
+        {
+            if (tags == null)
+                return false;
+
+            return HasTag(tags, "highway", "crossing") ||
+                   HasTag(tags, "footway", "crossing") ||
+                   HasTag(tags, "crossing") ||
+                   HasTag(tags, "crossing:markings");
+        }
+
+        private static bool IsStopSignNode(Dictionary<string, string> tags)
+        {
+            return HasTag(tags, "highway", "stop") ||
+                   HasTag(tags, "traffic_sign", "stop");
+        }
+
+        private static bool IsTrafficLightNode(Dictionary<string, string> tags)
+        {
+            return HasTag(tags, "highway", "traffic_signals") ||
+                   HasTag(tags, "traffic_signals");
+        }
+
+        private static bool HasTag(Dictionary<string, string> tags, string key)
+        {
+            return tags != null &&
+                   tags.TryGetValue(key, out var value) &&
+                   !string.IsNullOrWhiteSpace(value) &&
+                   !IsFalsey(value);
+        }
+
+        private static bool HasTag(Dictionary<string, string> tags, string key, string expectedValue)
+        {
+            return tags != null &&
+                   tags.TryGetValue(key, out var value) &&
+                   string.Equals(value, expectedValue, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsFalsey(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "":
+                case "no":
+                case "none":
+                case "false":
+                case "0":
+                case "off":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private static void ResolveParkingTags(
             string parkingLeftTag,
             string parkingRightTag,
@@ -1166,6 +1607,13 @@ namespace cs2_osm_importer
                 Sidewalk = way.Sidewalk,
                 ParkingSide = way.ParkingSide,
                 ParkingStyle = way.ParkingStyle,
+                HasBikeLanes = way.HasBikeLanes,
+                HasRoadsideTrees = way.HasRoadsideTrees,
+                HasTurnRestrictions = way.HasTurnRestrictions,
+                HasRestrictedLanes = way.HasRestrictedLanes,
+                BikeLaneSide = way.BikeLaneSide,
+                RoadsideTreeSide = way.RoadsideTreeSide,
+                RestrictedLaneSide = way.RestrictedLaneSide,
                 IsRoundabout = way.IsRoundabout
             };
 
@@ -1186,6 +1634,11 @@ namespace cs2_osm_importer
                 clone.Points.AddRange(way.Points);
                 clone.TerrainHeights.AddRange(way.TerrainHeights);
             }
+
+            clone.Crosswalks.AddRange(way.Crosswalks);
+            clone.StopSigns.AddRange(way.StopSigns);
+            clone.TrafficLights.AddRange(way.TrafficLights);
+            clone.TurnRestrictions.AddRange(way.TurnRestrictions);
 
             endNodeId = clone.NodeIds[clone.NodeIds.Count - 1];
             return clone;
@@ -1220,6 +1673,13 @@ namespace cs2_osm_importer
                 Sidewalk = ways[0].Sidewalk,
                 ParkingSide = ways[0].ParkingSide,
                 ParkingStyle = ways[0].ParkingStyle,
+                HasBikeLanes = ways[0].HasBikeLanes,
+                HasRoadsideTrees = ways[0].HasRoadsideTrees,
+                HasTurnRestrictions = ways[0].HasTurnRestrictions,
+                HasRestrictedLanes = ways[0].HasRestrictedLanes,
+                BikeLaneSide = ways[0].BikeLaneSide,
+                RoadsideTreeSide = ways[0].RoadsideTreeSide,
+                RestrictedLaneSide = ways[0].RestrictedLaneSide,
                 IsRoundabout = ways[0].IsRoundabout
             };
 
@@ -1282,6 +1742,14 @@ namespace cs2_osm_importer
 
                 if (way.ParkingStyle > merged.ParkingStyle)
                     merged.ParkingStyle = way.ParkingStyle;
+
+                merged.HasBikeLanes |= way.HasBikeLanes;
+                merged.HasRoadsideTrees |= way.HasRoadsideTrees;
+                merged.HasTurnRestrictions |= way.HasTurnRestrictions;
+                merged.HasRestrictedLanes |= way.HasRestrictedLanes;
+                merged.BikeLaneSide = MergeRoadFeatureSide(merged.BikeLaneSide, way.BikeLaneSide);
+                merged.RoadsideTreeSide = MergeRoadFeatureSide(merged.RoadsideTreeSide, way.RoadsideTreeSide);
+                merged.RestrictedLaneSide = MergeRoadFeatureSide(merged.RestrictedLaneSide, way.RestrictedLaneSide);
             }
 
             for (var i = 0; i < ways.Count; i++)
@@ -1298,14 +1766,61 @@ namespace cs2_osm_importer
                 if (i == 0)
                 {
                     merged.NodeIds.AddRange(way.NodeIds);
+                    AddDistinctNodeFeatures(merged.Crosswalks, way.Crosswalks);
+                    AddDistinctNodeFeatures(merged.StopSigns, way.StopSigns);
+                    AddDistinctNodeFeatures(merged.TrafficLights, way.TrafficLights);
+                    AddDistinctTurnRestrictions(merged.TurnRestrictions, way.TurnRestrictions);
                     continue;
                 }
 
                 for (var nodeIndex = 1; nodeIndex < way.NodeIds.Count; nodeIndex++)
                     merged.NodeIds.Add(way.NodeIds[nodeIndex]);
+
+                AddDistinctNodeFeatures(merged.Crosswalks, way.Crosswalks);
+                AddDistinctNodeFeatures(merged.StopSigns, way.StopSigns);
+                AddDistinctNodeFeatures(merged.TrafficLights, way.TrafficLights);
+                AddDistinctTurnRestrictions(merged.TurnRestrictions, way.TurnRestrictions);
             }
 
             return merged.Points.Count >= 2 ? merged : null;
+        }
+
+        private static void AddDistinctNodeFeatures(List<OsmRoadNodeFeature> target, List<OsmRoadNodeFeature> source)
+        {
+            if (target == null || source == null || source.Count == 0)
+                return;
+
+            var seen = new HashSet<long>(target.Select(feature => feature.NodeId));
+            foreach (var feature in source)
+            {
+                if (feature == null || !seen.Add(feature.NodeId))
+                    continue;
+
+                target.Add(feature);
+            }
+        }
+
+        private static void AddDistinctTurnRestrictions(List<OsmTurnRestriction> target, List<OsmTurnRestriction> source)
+        {
+            if (target == null || source == null || source.Count == 0)
+                return;
+
+            var seen = new HashSet<string>(target.Select(GetTurnRestrictionKey), StringComparer.Ordinal);
+            foreach (var restriction in source)
+            {
+                if (restriction == null || !seen.Add(GetTurnRestrictionKey(restriction)))
+                    continue;
+
+                target.Add(restriction);
+            }
+        }
+
+        private static string GetTurnRestrictionKey(OsmTurnRestriction restriction)
+        {
+            if (restriction == null)
+                return string.Empty;
+
+            return $"{restriction.ViaNodeId}:{restriction.ForbidLeftTurn}:{restriction.ForbidRightTurn}:{restriction.ForbidStraight}:{restriction.ForbidUTurn}";
         }
 
         private static void HarmonizeGroupElevations(List<OsmWay> ways)
@@ -1819,7 +2334,7 @@ namespace cs2_osm_importer
             if (string.IsNullOrWhiteSpace(roadLabel))
                 return string.Empty;
 
-            return $"{way.Highway.Trim()}|{roadLabel}|{way.Lanes}|{way.LanesForward}|{way.LanesBackward}|{way.LanesBothWays}|{way.ParkingSide}|{way.ParkingStyle}";
+            return $"{way.Highway.Trim()}|{roadLabel}|{way.Lanes}|{way.LanesForward}|{way.LanesBackward}|{way.LanesBothWays}|{way.ParkingSide}|{way.ParkingStyle}|{way.HasBikeLanes}|{way.HasRoadsideTrees}|{way.HasTurnRestrictions}|{way.HasRestrictedLanes}";
         }
 
         private static bool IsSupportedHighway(string highway)

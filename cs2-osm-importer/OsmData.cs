@@ -28,6 +28,14 @@ namespace cs2_osm_importer
         Perpendicular = 3,
     }
 
+    internal enum OsmRoadFeatureSide
+    {
+        None = 0,
+        Left = 1,
+        Right = 2,
+        Both = 3,
+    }
+
     internal struct OsmImportDefinition : IComponentData
     {
         public int SessionId;
@@ -56,6 +64,13 @@ namespace cs2_osm_importer
     {
         public HashSet<string> HighwayTypes { get; } = new HashSet<string>();
         public float IntersectionThresholdMeters { get; set; } = 8f;
+        public bool GenerateBikeLanes { get; set; } = true;
+        public bool GenerateRoadsideTrees { get; set; } = true;
+        public bool GenerateTurnRestrictions { get; set; } = true;
+        public bool GenerateCrosswalks { get; set; } = true;
+        public bool GenerateStopSigns { get; set; } = true;
+        public bool GenerateTrafficLights { get; set; } = true;
+        public bool GenerateRestrictedLanes { get; set; } = true;
     }
 
     internal sealed class OsmImportResult
@@ -106,8 +121,35 @@ namespace cs2_osm_importer
         public OsmSidewalkType Sidewalk { get; set; }
         public OsmParkingSideType ParkingSide { get; set; }
         public OsmParkingStyleType ParkingStyle { get; set; }
+        public bool HasBikeLanes { get; set; }
+        public bool HasRoadsideTrees { get; set; }
+        public bool HasTurnRestrictions { get; set; }
+        public bool HasRestrictedLanes { get; set; }
+        public OsmRoadFeatureSide BikeLaneSide { get; set; }
+        public OsmRoadFeatureSide RoadsideTreeSide { get; set; }
+        public OsmRoadFeatureSide RestrictedLaneSide { get; set; }
         public List<long> NodeIds { get; } = new List<long>();
         public List<float> TerrainHeights { get; } = new List<float>();
         public List<float3> Points { get; } = new List<float3>();
+        public List<OsmRoadNodeFeature> Crosswalks { get; } = new List<OsmRoadNodeFeature>();
+        public List<OsmRoadNodeFeature> StopSigns { get; } = new List<OsmRoadNodeFeature>();
+        public List<OsmRoadNodeFeature> TrafficLights { get; } = new List<OsmRoadNodeFeature>();
+        public List<OsmTurnRestriction> TurnRestrictions { get; } = new List<OsmTurnRestriction>();
+    }
+
+    internal sealed class OsmRoadNodeFeature
+    {
+        public long NodeId { get; set; }
+        public float3 Position { get; set; }
+    }
+
+    internal sealed class OsmTurnRestriction
+    {
+        public long ViaNodeId { get; set; }
+        public float3 ViaPosition { get; set; }
+        public bool ForbidLeftTurn { get; set; }
+        public bool ForbidRightTurn { get; set; }
+        public bool ForbidStraight { get; set; }
+        public bool ForbidUTurn { get; set; }
     }
 }

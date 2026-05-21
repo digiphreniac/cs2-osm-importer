@@ -175,6 +175,14 @@
           "lane": "1",
           "oneway": "no",
           "sidewalk": "none",
+          "bikeLanes": "yes",
+          "scenarioGroup": "base",
+          "prefab": "Small Road"
+        },
+        {
+          "lane": "1",
+          "oneway": "no",
+          "sidewalk": "none",
           "scenarioGroup": "base",
           "prefab": "Alley"
         },
@@ -189,8 +197,24 @@
           "lane": "1",
           "oneway": "yes",
           "sidewalk": "none",
+          "bikeLanes": "yes",
+          "scenarioGroup": "base",
+          "prefab": "Small Road Oneway - 1 lane"
+        },
+        {
+          "lane": "1",
+          "oneway": "yes",
+          "sidewalk": "none",
           "scenarioGroup": "base",
           "prefab": "Alley Oneway"
+        },
+        {
+          "lane": "2",
+          "oneway": "no",
+          "sidewalk": "none",
+          "bikeLanes": "yes",
+          "scenarioGroup": "base",
+          "prefab": "Small Road"
         },
         {
           "lane": "2",
@@ -205,6 +229,14 @@
           "sidewalk": "sidewalk",
           "scenarioGroup": "base",
           "prefab": "Small Road"
+        },
+        {
+          "lane": "2",
+          "oneway": "yes",
+          "sidewalk": "none",
+          "bikeLanes": "yes",
+          "scenarioGroup": "base",
+          "prefab": "Highway Oneway - 2 lanes"
         },
         {
           "lane": "2",

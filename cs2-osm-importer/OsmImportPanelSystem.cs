@@ -97,6 +97,7 @@ namespace cs2_osm_importer
         private EditorSection _advancedSettingsSection;
         private EditorSection _structuralElevationSection;
         private EditorSection _generateAdvancedSettingsSection;
+        private EditorSection _roadUpgradesSection;
         private FloatSliderField _generateIntersectionThresholdField;
         private Button _generateResetDefaultsButton;
         private readonly Dictionary<string, bool> _importRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -122,6 +123,13 @@ namespace cs2_osm_importer
         private double _embankmentElevationValue = 3d;
         private double _cuttingDepthValue = 3d;
         private double _intersectionThresholdValue = 8d;
+        private bool _generateBikeLanesValue = true;
+        private bool _generateRoadsideTreesValue = true;
+        private bool _generateTurnRestrictionsValue = true;
+        private bool _generateCrosswalksValue = true;
+        private bool _generateStopSignsValue = true;
+        private bool _generateTrafficLightsValue = true;
+        private bool _generateRestrictedLanesValue = true;
         private string _statusText = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         private int _fieldVersion;
         private bool _wasPanelActive;
@@ -463,6 +471,23 @@ namespace cs2_osm_importer
                 action = ResetGenerateDefaults,
             };
 
+            _roadUpgradesSection = new EditorSection
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.RoadUpgrades", "Road Upgrades"),
+                expanded = true,
+                disabled = () => _importSystem.IsImporting || !_importSystem.HasLoadedData,
+                children = new List<IWidget>
+                {
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateBikeLanes", "Bike lanes", () => _generateBikeLanesValue, SetGenerateBikeLanesValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateRoadsideTrees", "Roadside trees", () => _generateRoadsideTreesValue, SetGenerateRoadsideTreesValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateTurnRestrictions", "Turn restrictions", () => _generateTurnRestrictionsValue, SetGenerateTurnRestrictionsValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateCrosswalks", "Crosswalks", () => _generateCrosswalksValue, SetGenerateCrosswalksValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateStopSigns", "Stop signs", () => _generateStopSignsValue, SetGenerateStopSignsValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateTrafficLights", "Traffic lights", () => _generateTrafficLightsValue, SetGenerateTrafficLightsValue),
+                    BuildGeneratePropertyToggle("OsmImporter.Label.GenerateRestrictedLanes", "Restricted bus lanes", () => _generateRestrictedLanesValue, SetGenerateRestrictedLanesValue),
+                },
+            };
+
             _generateAdvancedSettingsSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.AdvancedSettings", "Advanced settings"),
@@ -479,6 +504,7 @@ namespace cs2_osm_importer
             {
                 _generateRoadTypesInstructionLabel,
                 _generateRoadTypeSelectionWidget,
+                _roadUpgradesSection,
                 _generateAdvancedSettingsSection,
                 _generateButton,
                 _deleteButton,
@@ -585,6 +611,13 @@ namespace cs2_osm_importer
             var options = new OsmGenerateOptions
             {
                 IntersectionThresholdMeters = (float)_intersectionThresholdValue,
+                GenerateBikeLanes = _generateBikeLanesValue,
+                GenerateRoadsideTrees = _generateRoadsideTreesValue,
+                GenerateTurnRestrictions = _generateTurnRestrictionsValue,
+                GenerateCrosswalks = _generateCrosswalksValue,
+                GenerateStopSigns = _generateStopSignsValue,
+                GenerateTrafficLights = _generateTrafficLightsValue,
+                GenerateRestrictedLanes = _generateRestrictedLanesValue,
             };
             foreach (var roadType in selectedTypes)
             {
@@ -634,6 +667,13 @@ namespace cs2_osm_importer
         private void ResetGenerateDefaults()
         {
             SetIntersectionThresholdValue(8d);
+            SetGenerateBikeLanesValue(true);
+            SetGenerateRoadsideTreesValue(true);
+            SetGenerateTurnRestrictionsValue(true);
+            SetGenerateCrosswalksValue(true);
+            SetGenerateStopSignsValue(true);
+            SetGenerateTrafficLightsValue(true);
+            SetGenerateRestrictedLanesValue(true);
             BumpFieldVersion();
             children = BuildChildren();
             UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
@@ -757,6 +797,9 @@ namespace cs2_osm_importer
 
             if (_generateAdvancedSettingsSection != null)
                 _generateAdvancedSettingsSection.disabled = () => isGenerateSectionDisabled;
+
+            if (_roadUpgradesSection != null)
+                _roadUpgradesSection.disabled = () => isGenerateSectionDisabled;
 
             SetWidgetObjectMember(_generateIntersectionThresholdField, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
             SetWidgetObjectMember(_generateResetDefaultsButton, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
@@ -898,6 +941,48 @@ namespace cs2_osm_importer
         private void SetIntersectionThresholdValue(double value)
         {
             _intersectionThresholdValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateBikeLanesValue(bool value)
+        {
+            _generateBikeLanesValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateRoadsideTreesValue(bool value)
+        {
+            _generateRoadsideTreesValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateTurnRestrictionsValue(bool value)
+        {
+            _generateTurnRestrictionsValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateCrosswalksValue(bool value)
+        {
+            _generateCrosswalksValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateStopSignsValue(bool value)
+        {
+            _generateStopSignsValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateTrafficLightsValue(bool value)
+        {
+            _generateTrafficLightsValue = value;
+            BumpFieldVersion();
+        }
+
+        private void SetGenerateRestrictedLanesValue(bool value)
+        {
+            _generateRestrictedLanesValue = value;
             BumpFieldVersion();
         }
 
@@ -1462,6 +1547,17 @@ namespace cs2_osm_importer
                     value => SetRoadTypeSelection(selections, key, value)),
                 valueVersion = () => _fieldVersion,
                 disabled = () => _importSystem != null && (_importSystem.IsImporting || (disableWhenCountZero && count <= 0)),
+            };
+        }
+
+        private ToggleField BuildGeneratePropertyToggle(string labelKey, string labelFallback, Func<bool> getter, Action<bool> setter)
+        {
+            return new ToggleField
+            {
+                displayName = OsmLocalization.T(labelKey, labelFallback),
+                accessor = new TypedValueAccessor<bool>(getter, setter),
+                valueVersion = () => _fieldVersion,
+                disabled = () => _importSystem != null && (_importSystem.IsImporting || !_importSystem.HasLoadedData),
             };
         }
 
