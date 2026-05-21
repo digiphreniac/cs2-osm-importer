@@ -15,6 +15,7 @@ namespace cs2_osm_importer
         private ValueBinding<string> _status;
         private ValueBinding<bool> _importing;
         private ValueBinding<string> _defaultOsmPath;
+        private ValueBinding<string> _defaultPriorityRoadNamesPath;
         private ValueBinding<bool> _hasLoadedData;
         private ValueBinding<string> _roadTypeCounts;
         private OsmImportSystem _importSystem;
@@ -34,12 +35,14 @@ namespace cs2_osm_importer
             _status = new ValueBinding<string>(Mod.Id, "importStatus", OsmLocalization.T("OsmImporter.Status.Ready", "Ready."), ValueWriters.Create<string>());
             _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
             _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
+            _defaultPriorityRoadNamesPath = new ValueBinding<string>(Mod.Id, "defaultPriorityRoadNamesPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
             _hasLoadedData = new ValueBinding<bool>(Mod.Id, "hasLoadedData", false, ValueWriters.Create<bool>());
             _roadTypeCounts = new ValueBinding<string>(Mod.Id, "roadTypeCounts", "{}", ValueWriters.Create<string>());
 
             AddBinding(_status);
             AddBinding(_importing);
             AddBinding(_defaultOsmPath);
+            AddBinding(_defaultPriorityRoadNamesPath);
             AddBinding(_hasLoadedData);
             AddBinding(_roadTypeCounts);
             AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
@@ -95,6 +98,7 @@ namespace cs2_osm_importer
                 ScaleFactor = options.ScaleFactor <= 0f ? 1f : options.ScaleFactor,
                 ElevationMeters = 0.2f,
                 ImportHighwayTypes = options.ImportHighwayTypes,
+                PriorityRoadNamesPath = options.PriorityRoadNamesPath,
                 MaxWays = options.MaxWays <= 0 ? 10000 : options.MaxWays
             }))
             {
@@ -158,6 +162,7 @@ namespace cs2_osm_importer
                 EmbankmentElevationMeters = ReadFloat(payload, "embankmentElevation", 3f),
                 CuttingDepthMeters = ReadFloat(payload, "cuttingDepth", 3f),
                 ImportHighwayTypes = importRoadTypes,
+                PriorityRoadNamesPath = ReadString(payload, "priorityRoadNamesPath"),
                 MaxWays = ReadInt(payload, "maxWays", 10000)
             };
         }

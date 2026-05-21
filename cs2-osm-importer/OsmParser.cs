@@ -38,6 +38,8 @@ namespace cs2_osm_importer
             if (!File.Exists(options.Path))
                 throw new FileNotFoundException("OSM file was not found.", options.Path);
 
+            var priorityRoadNames = ReadPriorityRoadNames(options.PriorityRoadNamesPath);
+
             var xml = new XmlDocument { XmlResolver = null };
             xml.Load(options.Path);
 
@@ -148,6 +150,7 @@ namespace cs2_osm_importer
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
             HarmonizeGroupElevations(finalWays);
+            finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
             if (document.Ways.Count > Math.Max(1, options.MaxWays))
@@ -1000,6 +1003,70 @@ namespace cs2_osm_importer
                 length += math.distance(way.Points[i - 1], way.Points[i]);
 
             return length;
+        }
+
+        private static Dictionary<string, int> ReadPriorityRoadNames(string path)
+        {
+            var priorities = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(path))
+                return priorities;
+
+            if (!File.Exists(path))
+                throw new FileNotFoundException("Priority road names file was not found.", path);
+
+            if (!string.Equals(Path.GetExtension(path), ".txt", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Priority road names file must be a .txt file.");
+
+            foreach (var line in File.ReadLines(path))
+            {
+                var name = (line ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(name) || priorities.ContainsKey(name))
+                    continue;
+
+                priorities[name] = priorities.Count;
+            }
+
+            if (priorities.Count > 0)
+                Mod.log.Info($"Loaded {priorities.Count} priority road names from '{path}'.");
+
+            return priorities;
+        }
+
+        private static List<OsmWay> PrioritizeWays(List<OsmWay> ways, Dictionary<string, int> priorityRoadNames)
+        {
+            if (ways == null || ways.Count == 0 || priorityRoadNames == null || priorityRoadNames.Count == 0)
+                return ways;
+
+            var prioritizedCount = ways.Count(way => GetPriorityRank(way, priorityRoadNames) < int.MaxValue);
+            if (prioritizedCount > 0)
+                Mod.log.Info($"Prioritized {prioritizedCount} OSM ways by name before applying the max ways limit.");
+
+            return ways
+                .Select((way, index) => new { Way = way, Index = index, Priority = GetPriorityRank(way, priorityRoadNames) })
+                .OrderBy(item => item.Priority == int.MaxValue ? 1 : 0)
+                .ThenBy(item => item.Priority)
+                .ThenBy(item => item.Index)
+                .Select(item => item.Way)
+                .ToList();
+        }
+
+        private static int GetPriorityRank(OsmWay way, Dictionary<string, int> priorityRoadNames)
+        {
+            if (way == null || priorityRoadNames == null || priorityRoadNames.Count == 0)
+                return int.MaxValue;
+
+            var displayName = GetWayDisplayName(way.Name, way.Ref);
+            return !string.IsNullOrWhiteSpace(displayName) && priorityRoadNames.TryGetValue(displayName, out var rank)
+                ? rank
+                : int.MaxValue;
+        }
+
+        private static string GetWayDisplayName(string name, string reference)
+        {
+            if (!string.IsNullOrWhiteSpace(name))
+                return name.Trim();
+
+            return string.IsNullOrWhiteSpace(reference) ? string.Empty : reference.Trim();
         }
 
         private static double GetPolylineSpan(List<float3> points)

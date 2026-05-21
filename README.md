@@ -28,6 +28,7 @@ Select **OSM Importer Tool** in the editor to open the mod tool panel.
 ### 4. Import the OSM Data
 Use **OSM file path** to pick your `.osm` file. Adjust options if needed, then click **Load OSM Data** and **Continue**.
 
+To prioritize important roads, optionally set **Priority roads file** to a `.txt` file with one road name per line. Matching roads are imported first, but only when their road type is selected in the import filter.
 
 > [!NOTE]
 > Loading may freeze the game for a few seconds while the file is parse.
@@ -70,6 +71,7 @@ If you omit the argument, it defaults to `patch`.
 - This project was based off of the [Cities Skylines OSM Import mod](https://steamcommunity.com/sharedfiles/filedetails/?id=1957515502).
 - Related tools/mods:
   - [cs2-minneapolis-osm-toolkit](https://github.com/Osyanne/cs2-minneapolis-osm-toolkit): Real-world GIS data from OpenStreetMap
+- Mod [Find It](https://mods.paradoxplaza.com/mods/77240/Windows) was vital in the development of this project. It is incredibly useful for referencing prefabs
 
 
 

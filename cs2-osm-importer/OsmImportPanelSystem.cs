@@ -83,6 +83,7 @@ namespace cs2_osm_importer
         private Button _confirmLoadButton;
         private Button _cancelLoadButton;
         private PopupValueField<string> _pathField;
+        private PopupValueField<string> _priorityRoadNamesPathField;
         private EditorSection _importDataSection;
         private IWidget _importRoadTypeSelectionWidget;
         private RoadTypeFilterAdapter _importRoadTypeFilterAdapter;
@@ -112,6 +113,7 @@ namespace cs2_osm_importer
         private HashSet<string> _generatedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _pendingGeneratedRoadTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string _pathValue;
+        private string _priorityRoadNamesPathValue = string.Empty;
         private double _simplifyToleranceValue = 1d;
         private double _curveToleranceValue = 0.5d;
         private double _scaleFactorValue = 1d;
@@ -135,6 +137,7 @@ namespace cs2_osm_importer
         private bool _wasPanelActive;
         private bool _showLoadConfirmation;
         private bool _isPathInvalid;
+        private bool _isPriorityRoadNamesPathInvalid;
         private bool _advancedSettingsExpanded = true;
         private bool _generateAdvancedSettingsExpanded = true;
 
@@ -147,6 +150,7 @@ namespace cs2_osm_importer
             uiTag = "UITagPrefab:OSMImportPanel";
 
             SetPathValue(GetDefaultOsmPath());
+            SetPriorityRoadNamesPathValue(GetDefaultOsmPath());
             SetSimplifyToleranceValue(1d);
             SetCurveToleranceValue(0.5d);
             SetScaleFactorValue(1d);
@@ -206,6 +210,15 @@ namespace cs2_osm_importer
                 icon = "Media/Editor/Folder.svg",
             };
             _pathField.popup = new FilePickerPopup(new[] { ".osm" }, () => _pathField.expanded = false);
+
+            _priorityRoadNamesPathField = new PopupValueField<string>
+            {
+                displayName = OsmLocalization.T("OsmImporter.Label.PriorityRoadNamesPath", "Priority roads file"),
+                tooltip = OsmLocalization.T("OsmImporter.Tooltip.PriorityRoadNamesPath", "Optional .txt file with one road name per line. Matching roads are imported first."),
+                accessor = new TypedValueAccessor<string>(() => _priorityRoadNamesPathValue, SetPriorityRoadNamesPathValue),
+                icon = "Media/Editor/Folder.svg",
+            };
+            _priorityRoadNamesPathField.popup = new FilePickerPopup(new[] { ".txt" }, () => _priorityRoadNamesPathField.expanded = false);
 
             _simplifyToleranceField = new FloatSliderField
             {
@@ -429,6 +442,7 @@ namespace cs2_osm_importer
                         displayName = OsmLocalization.T("OsmImporter.Label.ImportInstructions", "Pick an OSM input file and configure how the data is parsed before loading it into the game."),
                     },
                     _pathField,
+                    _priorityRoadNamesPathField,
                     _importRoadTypesInstructionLabel,
                     _importRoadTypeSelectionWidget,
                     _advancedSettingsSection,
@@ -564,6 +578,7 @@ namespace cs2_osm_importer
                 ElevationMeters = 0.2f,
                 UseImportHighwayTypesFilter = true,
                 ImportHighwayTypes = new HashSet<string>(GetSelectedRoadTypes(_importRoadTypeSelections), StringComparer.OrdinalIgnoreCase),
+                PriorityRoadNamesPath = GetPriorityRoadNamesPathForImport(),
                 LayerElevationStepMeters = (float)_layerElevationStepValue,
                 BridgeElevationMeters = (float)_bridgeElevationValue,
                 TunnelDepthMeters = (float)_tunnelDepthValue,
@@ -576,6 +591,12 @@ namespace cs2_osm_importer
             if (_isPathInvalid)
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.InvalidPath", "The selected file path is not a valid OSM file."));
+                return;
+            }
+
+            if (_isPriorityRoadNamesPathInvalid)
+            {
+                UpdateStatus(OsmLocalization.T("OsmImporter.Status.InvalidPriorityRoadNamesPath", "The priority roads file path must be empty or a valid .txt file."));
                 return;
             }
 
@@ -805,7 +826,7 @@ namespace cs2_osm_importer
             SetWidgetObjectMember(_generateResetDefaultsButton, "disabled", new Func<bool>(() => isGenerateSectionDisabled));
 
             if (_loadButton != null)
-                _loadButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid || _importRoadTypeSelections.Values.All(v => !v);
+                _loadButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid || _isPriorityRoadNamesPathInvalid || _importRoadTypeSelections.Values.All(v => !v);
 
             if (_resetDefaultsButton != null)
                 _resetDefaultsButton.disabled = () => isBusy;
@@ -876,6 +897,53 @@ namespace cs2_osm_importer
                 return false;
 
             return string.Equals(Path.GetExtension(path), ".osm", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsValidOptionalTextPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return true;
+
+            if (IsDefaultFolderPath(path))
+                return true;
+
+            if (!File.Exists(path))
+                return false;
+
+            return string.Equals(Path.GetExtension(path), ".txt", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string GetPriorityRoadNamesPathForImport()
+        {
+            return IsDefaultFolderPath(_priorityRoadNamesPathValue)
+                ? string.Empty
+                : (_priorityRoadNamesPathValue ?? string.Empty);
+        }
+
+        private static bool IsDefaultFolderPath(string path)
+        {
+            return string.Equals(path ?? string.Empty, GetDefaultOsmPath(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void SetPriorityRoadNamesPathValue(string value)
+        {
+            _priorityRoadNamesPathValue = value ?? string.Empty;
+            BumpFieldVersion();
+
+            _isPriorityRoadNamesPathInvalid = !IsValidOptionalTextPath(_priorityRoadNamesPathValue);
+            if (_isPriorityRoadNamesPathInvalid)
+            {
+                UpdateStatus(OsmLocalization.T("OsmImporter.Status.InvalidPriorityRoadNamesPath", "The priority roads file path must be empty or a valid .txt file."));
+            }
+            else if (_importSystem != null)
+            {
+                UpdateStatus(_importSystem.Status);
+                FlushStatusRebuild();
+            }
+            else
+            {
+                UpdateStatus(OsmLocalization.T("OsmImporter.Status.Ready", "Ready."));
+            }
         }
 
         private void SetSimplifyToleranceValue(double value)

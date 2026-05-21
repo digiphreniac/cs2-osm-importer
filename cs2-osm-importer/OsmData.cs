@@ -56,6 +56,7 @@ namespace cs2_osm_importer
         public float CuttingDepthMeters { get; set; } = 3f;
         public bool UseImportHighwayTypesFilter { get; set; }
         public HashSet<string> ImportHighwayTypes { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public string PriorityRoadNamesPath { get; set; } = string.Empty;
         public string RoadPrefabName { get; set; } = string.Empty;
         public int MaxWays { get; set; } = 10000;
     }
