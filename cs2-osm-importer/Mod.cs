@@ -25,7 +25,7 @@ namespace cs2_osm_importer
         {
             log.Info(nameof(OnLoad));
 
-            GameManager.instance.localizationManager.AddSource("en-US", OsmLocalization.CreateEnglishSource());
+            GameManager.instance.localizationManager.AddSource("en-US", OsmLocalization.CreateEditorFallbackSource());
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
             {

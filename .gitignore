@@ -13,3 +13,4 @@ opencode.json
 cs2-osm-importer/Library/
 cs2-osm-importer/ui/node_modules/
 Mono.Cecil*.dll
+.vscode/settings.json

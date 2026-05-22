@@ -2,10 +2,13 @@
 
 import "./assets/Openstreetmap_logo.png";
 import { ModRegistrar } from "cs2/modding";
+import { registerFilterMenuLabel } from "mods/FilterMenuLabel/filterMenuLabel";
 import { OsmToolOptions } from "mods/OsmToolOptions";
 import { ToolOptionsVisibility } from "mods/ToolOptionsVisible/toolOptionsVisible";
 
 const register: ModRegistrar = (moduleRegistry) => {
+    registerFilterMenuLabel(moduleRegistry);
+
     moduleRegistry.extend(
         "game-ui/game/components/tool-options/mouse-tool-options/mouse-tool-options.tsx",
         "MouseToolOptions",
