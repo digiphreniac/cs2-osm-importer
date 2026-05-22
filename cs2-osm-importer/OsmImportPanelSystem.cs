@@ -503,19 +503,6 @@ namespace cs2_osm_importer
                 _deleteButton,
             };
 
-            var shouldShowDetail = _importSystem != null && _importSystem.IsImporting && _statusText.Contains(" | ");
-            if (shouldShowDetail)
-            {
-                var parts = _statusText.Split(new[] { " | " }, StringSplitOptions.RemoveEmptyEntries);
-                for (var i = 0; i < parts.Length; i += 3)
-                {
-                    var rowChildren = new List<IWidget>();
-                    for (var j = i; j < i + 3 && j < parts.Length; j++)
-                        rowChildren.Add(new Label { displayName = parts[j].Trim() });
-                    generateChildren.Add(CreateRow(rowChildren));
-                }
-            }
-
             var generateSection = new EditorSection
             {
                 displayName = OsmLocalization.T("OsmImporter.Label.GenerateRoads", "Generate Roads"),
@@ -536,7 +523,7 @@ namespace cs2_osm_importer
             var rootChildren = new List<IWidget> { scrollable };
 
             var summaryText = _importSystem?.StatusSummary ?? string.Empty;
-            var bottomText = !string.IsNullOrEmpty(summaryText) ? summaryText : (shouldShowDetail ? string.Empty : _statusText);
+            var bottomText = !string.IsNullOrEmpty(summaryText) ? summaryText : _statusText;
             if (!string.IsNullOrEmpty(bottomText))
             {
                 rootChildren.Add(new Divider());
@@ -1314,7 +1301,7 @@ namespace cs2_osm_importer
             if (_importSystem.IsImporting && (text.Contains("loading") || text.Contains("parsing") || text.Contains("preparing")))
                 return "Media/Game/Icons/Roads.svg";
 
-            if (_importSystem.IsImporting && (text.Contains("generating") || text.Contains("done") || text.Contains("waiting") || text.Contains(" | ")))
+            if (_importSystem.IsImporting && (text.Contains("generating") || text.Contains("waiting") || text.Contains("verifying") || text.Contains("cs2 gen")))
                 return "Media/Game/Icons/RoadsServices.svg";
 
             if (_importSystem.HasGeneratedAssets || text.Contains("road generation complete"))

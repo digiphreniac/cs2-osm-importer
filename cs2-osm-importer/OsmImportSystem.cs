@@ -204,24 +204,6 @@ namespace cs2_osm_importer
                    $"restrictedBusLanes={options.GenerateRestrictedLanes}";
         }
 
-        private string BuildGenerationDetailStatus()
-        {
-            if (_generationTypeOrder == null || _generationTypeOrder.Count == 0)
-                return L("OsmImporter.Status.Ready", "Ready.");
-
-            var parts = new List<string>(_generationTypeOrder.Count);
-            for (var i = 0; i < _generationTypeOrder.Count; i++)
-            {
-                var type = _generationTypeOrder[i];
-                var count = _typeWayCounts.TryGetValue(type, out var c) ? c : 0;
-                var label = i < _typeIndex ? "DONE"
-                          : i == _typeIndex ? "GENERATING"
-                          : "WAITING";
-                parts.Add($"{DisplayHighwayType(type)} ({count}): {label}");
-            }
-            return string.Join(" | ", parts);
-        }
-
         protected override void OnCreate()
         {
             base.OnCreate();
@@ -469,9 +451,7 @@ namespace cs2_osm_importer
                 _phase = _roundaboutConnectorWays.Count > 0
                     ? WorkPhase.QueueRoundaboutConnectors
                     : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply);
-                SetStatus(_generationTypeOrder.Count > 0
-                    ? BuildGenerationDetailStatus()
-                    : L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
+                SetStatus(L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 _loggedFirstQueuedSegment = false;
             }
             catch (Exception ex)
@@ -562,7 +542,6 @@ namespace cs2_osm_importer
                     _pointIndex = 0;
                 }
 
-                SetStatus(BuildGenerationDetailStatus());
                 if (_typeIndex < _generationTypeOrder.Count)
                 {
                     var completedWays = 0;
@@ -701,30 +680,11 @@ namespace cs2_osm_importer
                 var generatedRoadEdges = Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
-                string detail;
-                if (_generationTypeOrder.Count > 0)
-                {
-                    var parts = new List<string>(_generationTypeOrder.Count);
-                    for (var i = 0; i < _generationTypeOrder.Count; i++)
-                    {
-                        var t = _generationTypeOrder[i];
-                        var cnt = _typeWayCounts.TryGetValue(t, out var cc) ? cc : 0;
-                        var lbl = "WAITING";
-                        if (i < _typeIndex) lbl = "DONE";
-                        else if (i == _typeIndex) lbl = "GENERATING";
-                        parts.Add($"{DisplayHighwayType(t)} ({cnt}): {lbl}");
-                    }
-                    detail = string.Join(" | ", parts);
-                }
-                else
-                {
-                    detail = L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads...");
-                }
                 var waitMsg = pendingDefinitions > 0
                     ? LF("OsmImporter.Status.WaitingForCS2", "CS2 gen... {0}/{1}", consumedDefinitions, _importedSegments)
                     : LF("OsmImporter.Status.CS2Verifying", "Verifying... CS2 consumed {0}", _importedSegments);
-                SetStatus(detail);
-                StatusSummary = waitMsg;
+                SetStatus(waitMsg);
+                StatusSummary = string.Empty;
 
                 if (pendingDefinitions != _lastPendingDefinitions && _applyWaitFrames - _lastWaitLogFrame >= 300)
                 {
@@ -893,7 +853,7 @@ namespace cs2_osm_importer
                     _applyWaitFrames = 0;
                     _roundaboutNodeUpgradesApplied = false;
                     StatusSummary = "Roundabouts queued";
-                    SetStatus(BuildGenerationDetailStatus());
+                    SetStatus(StatusSummary);
                 }
             }
             catch (Exception ex)
