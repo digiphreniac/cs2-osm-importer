@@ -778,18 +778,9 @@ namespace cs2_osm_importer
 
                     ApplyQueuedRoadNames();
                     ApplyRoadServiceUpgrades();
-                    var uniqueNames = _queuedSegmentInfos
-                        .Select(i => i.Name)
-                        .Where(n => !string.IsNullOrWhiteSpace(n))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(n => n)
-                        .ToList();
-                    var namesPreview = uniqueNames.Count > 0
-                        ? string.Join(", ", uniqueNames.Take(50).Select(n => $"\"{EscapeJson(n)}\""))
-                        : "(none)";
                     var message = generatedRoadEdges > 0
-                        ? LF("OsmImporter.Status.GeneratedRoads", "CS2 consumed {0} road definitions; detected {1} new road edges. Import bounds: {2}. Names: {3}", _importedSegments, generatedRoadEdges, ShortBounds(_document), namesPreview)
-                        : LF("OsmImporter.Status.GeneratedRoadsUnknown", "CS2 consumed {0} road definitions. Generated road count could not be verified. Names: {1}", _importedSegments, namesPreview);
+                        ? LF("OsmImporter.Status.GeneratedRoads", "CS2 consumed {0} road definitions; detected {1} new road edges. Import bounds: {2}.", _importedSegments, generatedRoadEdges, ShortBounds(_document))
+                        : LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
 
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
