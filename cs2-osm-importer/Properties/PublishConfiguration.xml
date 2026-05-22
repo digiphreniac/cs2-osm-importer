@@ -76,6 +76,8 @@ Please look at the existing issues before creating one to avoid creating duplica
   <!--Dependency for the mod, can be set multiple times-->
   <Dependency Id="74417" />
   <!-- "UnifiedIconLibrary" -->
+  <Dependency Id="75426" DisplayName="I18n EveryWhere" />
+  <!-- "I18n EveryWhere" -->
   <!--Required DLC, can be set multiple times. Supported values are "Landmark Buildings", "San Fransisco Set", "Beach Properties", "Urban Promenades", "Modern Architecture"-->
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
