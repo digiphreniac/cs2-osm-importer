@@ -82,6 +82,9 @@
         <None Include="$(ModPropsFile)" Link="Properties\Mod.props"/>
         <None Include="$(ModTargetsFile)" Link="Properties\Mod.targets"/>
         <None Include="prefab-mappings.json" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="lang\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <Target Name="BuildUI" AfterTargets="AfterBuild">
@@ -97,14 +100,6 @@
         <Copy
             SourceFiles="$(ProjectDir)ui\src\assets\StatusInfo.svg"
             DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\StatusInfo.svg"
-            SkipUnchangedFiles="true" />
-    </Target>
-
-    <Target Name="CopyUiLocalization" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">
-        <MakeDir Directories="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\lang" />
-        <Copy
-            SourceFiles="$(ProjectDir)ui\lang\en-US.json"
-            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\lang\en-US.json"
             SkipUnchangedFiles="true" />
     </Target>
 
