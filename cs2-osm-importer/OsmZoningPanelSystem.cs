@@ -14,6 +14,7 @@ namespace cs2_osm_importer
         private OsmZoningImportSystem _importSystem;
         private Label _featureCountLabel;
         private Button _applyButton;
+        private int _lastFeatureCount = -1;
 n        protected override void OnCreate()
         {
             base.OnCreate();
@@ -29,6 +30,12 @@ namespace cs2_osm_importer
             {
                 var count = _importSystem.GetPreviewFeatureCount();
                 _featureCountLabel.displayName = $"Parsed features: {count}";
+                if (count != _lastFeatureCount)
+                {
+                    _lastFeatureCount = count;
+                    // Rebuild children to show the feature list and overrides when preview changes.
+                    children = BuildChildren();
+                }
             }
         }
 n        private void SetPathValue(string v) => _pathValue = v;
@@ -52,6 +59,32 @@ namespace cs2_osm_importer
 n            content.Add(new Divider());
             _featureCountLabel = new Label { displayName = "Parsed features: 0" };
             content.Add(_featureCountLabel);
+n            // Feature list with density override controls (limited to first 200 features for performance)
+            var features = _importSystem?.GetPreviewFeatures() ?? new List<OsmZoningFeature>();
+            var maxDisplay = 200;
+            int displayed = 0;
+            foreach (var f in features)
+            {
+                if (displayed++ >= maxDisplay) break;
+                content.Add(new Label { displayName = $"[{f.Id}] {f.Type} - { (string.IsNullOrEmpty(f.Name) ? "(no name)" : f.Name) }" });
+                var currentOverride = _importSystem.GetFeatureDensityOverride(f.Id);
+                var current = currentOverride.HasValue ? currentOverride.Value.ToString() : "Auto";
+                var popup = new PopupValueField<string>
+                {
+                    displayName = "Density override",
+                    accessor = new TypedValueAccessor<string>(() => current, v => {
+                        // parse v and set override
+                        if (string.Equals(v, "Auto", System.StringComparison.OrdinalIgnoreCase))
+                            _importSystem.SetFeatureDensityOverride(f.Id, null);
+                        else if (System.Enum.TryParse<DensityLevel>(v, out var parsed))
+                            _importSystem.SetFeatureDensityOverride(f.Id, parsed);
+                    }),
+                    items = new[] { "Auto", "Low", "Medium", "High" }
+                };
+                content.Add(popup);
+            }
+n            if (features.Count > maxDisplay)
+                content.Add(new Label { displayName = $"... {features.Count - maxDisplay} more features not shown" });
 n            content.Add(new Label { displayName = "Apply zoning is Play-mode only. Use 'Apply Zoning' while the city is running." });
             _applyButton = new Button { displayName = "Apply Zoning" };
             _applyButton.tooltip = "Requires Play mode; Apply parsed zoning to the running city.";
