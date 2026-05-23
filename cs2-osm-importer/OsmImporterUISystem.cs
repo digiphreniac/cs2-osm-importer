@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Colossal.UI.Binding;
+using Game.Settings;
 using Game.UI.Editor;
 using Game.UI;
 
@@ -48,10 +49,11 @@ namespace cs2_osm_importer
             AddBinding(new TriggerBinding<string>(Mod.Id, "loadOSMData", LoadOSMData, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "generateOSMRoads", GenerateOSMRoads, ValueReaders.Create<string>()));
             AddBinding(new TriggerBinding<string>(Mod.Id, "deleteAllSegments", DeleteAllSegments, ValueReaders.Create<string>()));
-#if DEBUG
-            AddBinding(new ValueBinding<bool>(Mod.Id, "isDebugMode", true));
-            AddBinding(new TriggerBinding<string>(Mod.Id, "tryValidate", TryValidateRoadNames, ValueReaders.Create<string>()));
-#endif
+            if (Mod.Settings?.DeveloperMode == true)
+            {
+                AddBinding(new ValueBinding<bool>(Mod.Id, "isDebugMode", true));
+                AddBinding(new TriggerBinding<string>(Mod.Id, "tryValidate", TryValidateRoadNames, ValueReaders.Create<string>()));
+            }
         }
 
         protected override void OnGamePreload(Colossal.Serialization.Entities.Purpose purpose, Game.GameMode mode)
@@ -135,13 +137,10 @@ namespace cs2_osm_importer
             UpdateImportBindings(force: true);
         }
 
-#if DEBUG
         private void TryValidateRoadNames(string payload)
         {
             _status.Update(_importSystem.TryValidateNames());
         }
-
-#endif
 
         private static OsmImportOptions ParseImportOptions(string payload)
         {

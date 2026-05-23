@@ -1,5 +1,5 @@
 ﻿{
-    "id":  "cs2-osm-importer",
+    "id":  "cs2_osm_importer",
     "author":  "digiphreniac",
     "version":  "1.1.0",
     "dependencies":  [

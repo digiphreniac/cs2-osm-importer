@@ -5,6 +5,7 @@ using Colossal.Logging;
 using Game;
 using Game.Modding;
 using Game.SceneFlow;
+using Game.Settings;
 using System.IO;
 
 
@@ -12,7 +13,7 @@ namespace cs2_osm_importer
 {
     public class Mod : IMod
     {
-        public const string Id = "cs2-osm-importer";
+        public const string Id = "cs2_osm_importer";
         public const string ToolId = "OSM Importer Tool";
         public static string ModDirectory { get; private set; } = string.Empty;
 
@@ -20,6 +21,8 @@ namespace cs2_osm_importer
             .SetShowsErrorsInUI(true);
 
         public const string ButtonActionName = "ToggleOSMImporterTool";
+
+        public static OsmImporterSettings Settings { get; private set; }
 
         public void OnLoad(UpdateSystem updateSystem)
         {
@@ -33,6 +36,10 @@ namespace cs2_osm_importer
                 ModDirectory = Path.GetDirectoryName(asset.path) ?? string.Empty;
             }
 
+            Settings = new OsmImporterSettings(this);
+            Settings.RegisterInOptionsUI();
+            AssetDatabase.global.LoadSettings(Mod.Id, Settings, new OsmImporterSettings(this));
+
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<OsmImportToolSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<OsmImportSystem>(SystemUpdatePhase.ToolUpdate);
@@ -41,6 +48,12 @@ namespace cs2_osm_importer
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
+
+            if (Settings != null)
+            {
+                Settings.UnregisterInOptionsUI();
+                Settings = null;
+            }
         }
     }
 }

@@ -162,5 +162,10 @@
   "OsmImporter.Value.AllLoadedTypes": "all loaded types",
   "OsmImporter.Value.AllSupportedTypes": "all supported types",
   "OsmImporter.Value.None": "none",
-  "OsmImporter.Value.Unknown": "unknown"
+  "OsmImporter.Value.Unknown": "unknown",
+  "Options.OPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DeveloperMode]": "Developer Mode",
+  "Options.OPTION_DESCRIPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DeveloperMode]": "Enables debug UI bindings and developer-only features for the OSM Importer mod.",
+  "Options.SECTION[cs2_osm_importer.cs2_osm_importer.Mod]": "OSM Importer",
+  "Options.TAB[cs2_osm_importer.cs2_osm_importer.Mod.Settings]": "Settings",
+  "Options.GROUP[cs2_osm_importer.cs2_osm_importer.Mod.Developer]": "Developer"
 }

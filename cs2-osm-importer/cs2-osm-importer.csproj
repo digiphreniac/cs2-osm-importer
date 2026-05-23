@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
+        <AssemblyName>cs2_osm_importer</AssemblyName>
         <Configurations>Debug;Release</Configurations>
 
         <!--The file where mod information which is required for publishing mod on PDX mods are stored-->
@@ -92,21 +93,21 @@
     </Target>
 
     <Target Name="CopyUiIcons" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">
-        <MakeDir Directories="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images" />
+        <MakeDir Directories="$(CSIIUserDataPath)\Mods\$(AssemblyName)\images" />
         <Copy
             SourceFiles="$(ProjectDir)ui\src\assets\Openstreetmap_logo.png"
-            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\Openstreetmap_logo.png"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(AssemblyName)\images\Openstreetmap_logo.png"
             SkipUnchangedFiles="true" />
         <Copy
             SourceFiles="$(ProjectDir)ui\src\assets\StatusInfo.svg"
-            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\images\StatusInfo.svg"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(AssemblyName)\images\StatusInfo.svg"
             SkipUnchangedFiles="true" />
     </Target>
 
     <Target Name="CopyPrefabMappings" AfterTargets="BuildUI" Condition="'$(CSIIUserDataPath)' != ''">
         <Copy
             SourceFiles="$(ProjectDir)prefab-mappings.json"
-            DestinationFiles="$(CSIIUserDataPath)\Mods\$(MSBuildProjectName)\prefab-mappings.json"
+            DestinationFiles="$(CSIIUserDataPath)\Mods\$(AssemblyName)\prefab-mappings.json"
             SkipUnchangedFiles="true" />
     </Target>
 </Project>

@@ -11,7 +11,12 @@ namespace cs2_osm_importer
     {
         private static readonly Dictionary<string, string> EditorFallbacks = new Dictionary<string, string>
         {
-            { $"Editor.TOOL[{Mod.ToolId}]", "OSM Importer Tool" }
+            { $"Editor.TOOL[{Mod.ToolId}]", "OSM Importer Tool" },
+            { $"Options.SECTION[{Mod.Id}.{Mod.Id}.Mod]", "OSM Importer" },
+            { $"Options.TAB[{Mod.Id}.{Mod.Id}.Mod.Settings]", "Settings" },
+            { $"Options.GROUP[{Mod.Id}.{Mod.Id}.Mod.Developer]", "Developer" },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DeveloperMode]", "Developer Mode" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DeveloperMode]", "Enables debug UI bindings and developer-only features for the OSM Importer mod." }
         };
 
         internal static MemorySource CreateEditorFallbackSource()
