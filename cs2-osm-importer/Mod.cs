@@ -1,4 +1,4 @@
-﻿using Colossal.IO.AssetDatabase;
+using Colossal.IO.AssetDatabase;
 using Colossal.Localization;
 using Colossal.Logging;
 
@@ -44,9 +44,12 @@ namespace cs2_osm_importer
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<OsmImportToolSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<OsmImportSystem>(SystemUpdatePhase.ToolUpdate);
-        }
 
-        public void OnDispose()
+            // Register zoning UI + tool systems (scaffolding for new feature)
+            updateSystem.UpdateAt<OsmZoningPanelSystem>(SystemUpdatePhase.UIUpdate);
+            updateSystem.UpdateAt<OsmZoningImportSystem>(SystemUpdatePhase.ToolUpdate);
+        }
+n        public void OnDispose()
         {
             log.Info(nameof(OnDispose));
 
