@@ -21,7 +21,8 @@ namespace cs2_osm_importer
                 var doc = OsmZoningParser.Parse(path);
                 _lastPreview = doc;
                 Mod.log.Info($"OSM zoning: parsed {doc.Features.Count} features (preview stored in memory).");
-n                // Optionally write a JSON preview to the mod directory or temp directory.
+
+                // Optionally write a JSON preview to the mod directory or temp directory.
                 var outDir = string.IsNullOrWhiteSpace(Mod.ModDirectory) ? Path.GetTempPath() : Mod.ModDirectory;
                 var outPath = Path.Combine(outDir, "osm_zoning_preview.json");
                 try
@@ -39,6 +40,12 @@ namespace cs2_osm_importer
             {
                 Mod.log.Error($"OSM zoning: failed to parse file: {ex.Message}");
             }
+        }
+
+        // Return number of parsed features in last preview.
+        public int GetPreviewFeatureCount()
+        {
+            return _lastPreview?.Features?.Count ?? 0;
         }
 
         // Apply zoning into the running game. This operation must be performed while the city is running (Play mode).
