@@ -12,6 +12,8 @@ namespace cs2_osm_importer
         private PopupValueField<string> _pathField;
         private Button _loadButton;
         private OsmZoningImportSystem _importSystem;
+        private Label _featureCountLabel;
+        private Button _applyButton;
 n        protected override void OnCreate()
         {
             base.OnCreate();
@@ -20,10 +22,21 @@ namespace cs2_osm_importer
             uiTag = "UITagPrefab:OSMZoningPanel";
             children = BuildChildren();
         }
+n        protected override void OnUpdate()
+        {
+            base.OnUpdate();
+            if (_featureCountLabel != null && _importSystem != null)
+            {
+                var count = _importSystem.GetPreviewFeatureCount();
+                _featureCountLabel.displayName = $"Parsed features: {count}";
+            }
+        }
 n        private void SetPathValue(string v) => _pathValue = v;
 n        private List<IWidget> BuildChildren()
         {
             var content = new List<IWidget>();
+n            content.Add(new Label { displayName = "OSM Zoning Import Tool" });
+            content.Add(new Divider());
 n            _pathField = new PopupValueField<string>
             {
                 displayName = "OSM file path",
@@ -37,8 +50,16 @@ namespace cs2_osm_importer
             _loadButton.triggered = () => _importSystem.LoadZoningFromFile(_pathValue);
             content.Add(_loadButton);
 n            content.Add(new Divider());
+            _featureCountLabel = new Label { displayName = "Parsed features: 0" };
+            content.Add(_featureCountLabel);
+n            content.Add(new Label { displayName = "Apply zoning is Play-mode only. Use 'Apply Zoning' while the city is running." });
+            _applyButton = new Button { displayName = "Apply Zoning" };
+            _applyButton.tooltip = "Requires Play mode; Apply parsed zoning to the running city.";
+            _applyButton.triggered = () => _importSystem.ApplyZoning();
+            content.Add(_applyButton);
+n            content.Add(new Divider());
             content.Add(new Label { displayName = "Density inference will be suggested; overrides available in Play mode." });
 n            return content;
         }
     }
-}
+}
