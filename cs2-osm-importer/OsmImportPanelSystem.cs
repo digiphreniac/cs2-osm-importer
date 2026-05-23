@@ -106,9 +106,6 @@ namespace cs2_osm_importer
         private readonly Dictionary<string, bool> _generateRoadTypeSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly List<RoadTypeToggleButton> _roadTypeTiles = new List<RoadTypeToggleButton>();
         private readonly List<string> _roadTypesOrder = new List<string>(SupportedRoadTypes);
-        private static readonly HashSet<string> DefaultSelectedRoadTypes =
-            new HashSet<string>(SupportedRoadTypes, StringComparer.OrdinalIgnoreCase);
-
         private static readonly (string Key, string LabelKey, string LabelFallback)[] SupportedRoadUpgrades =
         {
             ("bikeLanes", "OsmImporter.Label.GenerateBikeLanes", "Bike lanes"),
@@ -141,7 +138,10 @@ namespace cs2_osm_importer
         private string _statusText = OsmLocalization.T("OsmImporter.Status.Ready", "Ready.");
         private int _fieldVersion;
         private bool _wasPanelActive;
+        private int _lastAppliedSettingsHash;
         private bool _showLoadConfirmation;
+        private bool _pendingAutoGenerate;
+        private Button _devLoadAndGenerateButton;
         private bool _isPathInvalid;
         private bool _isPriorityRoadNamesPathInvalid;
         private bool _advancedSettingsExpanded = true;
@@ -155,14 +155,7 @@ namespace cs2_osm_importer
             title = OsmLocalization.T("OsmImporter.Panel.Title", "OSM Importer Tool");
             uiTag = "UITagPrefab:OSMImportPanel";
 
-            SetPathValue(GetDefaultOsmPath());
-            SetPriorityRoadNamesPathValue(GetDefaultOsmPath());
-            SetSimplifyToleranceValue(1d);
-            SetCurveToleranceValue(0.5d);
-            SetScaleFactorValue(1d);
-            SetMaxWaysValue(10000);
-            SelectDefaultRoadTypes();
-            SelectDefaultRoadUpgrades();
+            ApplySettingsDefaults();
             children = BuildChildren();
             UpdateStatus(_importSystem.Status);
         }
@@ -184,8 +177,23 @@ namespace cs2_osm_importer
 
             if (_importSystem != null && _statusLabel != null)
             {
+                // Poll settings for changes.  When Options is opened as an overlay the panel
+                // stays active, so the activation transition never fires.  We detect changes
+                // by comparing a hash of every setting against the last-applied hash.
+                if (!_importSystem.IsImporting && Mod.Settings != null)
+                {
+                    var currentHash = ComputeSettingsHash();
+                    if (currentHash != _lastAppliedSettingsHash)
+                    {
+                        _lastAppliedSettingsHash = currentHash;
+                        ApplySettingsDefaults();
+                        children = BuildChildren();
+                    }
+                }
+
                 UpdateImportSectionState();
                 UpdateRoadTypeCounts();
+                HandlePendingAutoGenerate();
                 UpdateStatus(_importSystem.Status);
                 FlushStatusRebuild();
                 UpdateControlStates();
@@ -454,6 +462,13 @@ namespace cs2_osm_importer
                 action = GenerateRoads,
             };
 
+            _devLoadAndGenerateButton = new Button
+            {
+                displayName = OsmLocalization.T("OsmImporter.Button.DevLoadAndGenerate", "DEV: Load & Generate"),
+                action = DevLoadAndGenerate,
+                hidden = () => Mod.Settings?.DevLoadAndGenerateInOneClick != true,
+            };
+
             _deleteButton = new Button
             {
                     displayName = OsmLocalization.T("OsmImporter.Button.DeleteAllSegments", "Delete All Segments"),
@@ -512,6 +527,7 @@ namespace cs2_osm_importer
             };
 
             content.Add(generateSection);
+            content.Add(_devLoadAndGenerateButton);
 
             var scrollable = new Scrollable
             {
@@ -533,7 +549,7 @@ namespace cs2_osm_importer
             return rootChildren;
         }
 
-        private void LoadOsmData()
+        private bool LoadOsmData()
         {
             var options = new OsmImportOptions
             {
@@ -557,23 +573,24 @@ namespace cs2_osm_importer
             if (_isPathInvalid)
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.InvalidPath", "The selected file path is not a valid OSM file."));
-                return;
+                return false;
             }
 
             if (_isPriorityRoadNamesPathInvalid)
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.InvalidPriorityRoadNamesPath", "The priority roads file path must be empty or a valid .txt file."));
-                return;
+                return false;
             }
 
             if (!_importSystem.LoadOsmData(options))
             {
                 UpdateStatus(OsmLocalization.T("OsmImporter.Status.LoadInProgress", "An OSM import is already running."));
-                return;
+                return false;
             }
 
             UpdateStatus(_importSystem.Status);
             FlushStatusRebuild();
+            return true;
         }
 
         private void PromptLoadOsmDataConfirmation()
@@ -590,6 +607,15 @@ namespace cs2_osm_importer
         private void CancelLoadOsmDataConfirmation()
         {
             _showLoadConfirmation = false;
+        }
+
+        private void DevLoadAndGenerate()
+        {
+            if (Mod.Settings?.DevLoadAndGenerateInOneClick != true)
+                return;
+
+            _showLoadConfirmation = false;
+            _pendingAutoGenerate = LoadOsmData();
         }
 
         private void GenerateRoads()
@@ -635,27 +661,131 @@ namespace cs2_osm_importer
             UpdateStatus(_importSystem.Status);
         }
 
+        /// <summary>
+        /// Reads all default values from <see cref="Mod.Settings"/> and applies them to the
+        /// panel's input fields. Falls back to hardcoded values if settings are unavailable.
+        /// </summary>
+        private void ApplySettingsDefaults()
+        {
+            var settings = Mod.Settings;
+            if (settings != null)
+            {
+                if (!string.IsNullOrWhiteSpace(settings.DefaultOsmPath))
+                    SetPathValue(settings.DefaultOsmPath);
+                else
+                    SetPathValue(GetDefaultOsmPath());
+
+                if (!string.IsNullOrWhiteSpace(settings.DefaultPriorityRoadNamesPath))
+                    SetPriorityRoadNamesPathValue(settings.DefaultPriorityRoadNamesPath);
+                else
+                    SetPriorityRoadNamesPathValue(GetDefaultOsmPath());
+
+                SetSimplifyToleranceValue(settings.DefaultSimplifyTolerance);
+                SetCurveToleranceValue(settings.DefaultCurveTolerance);
+                SetScaleFactorValue(settings.DefaultScaleFactor);
+                SetMaxWaysValue(settings.DefaultMaxWays);
+                SetLayerElevationStepValue(settings.DefaultLayerElevationStep);
+                SetBridgeElevationValue(settings.DefaultBridgeElevation);
+                SetTunnelDepthValue(settings.DefaultTunnelDepth);
+                SetCoveredDepthValue(settings.DefaultCoveredDepth);
+                SetEmbankmentElevationValue(settings.DefaultEmbankmentElevation);
+                SetCuttingDepthValue(settings.DefaultCuttingDepth);
+                SetIntersectionThresholdValue(settings.DefaultIntersectionThreshold);
+                SelectDefaultRoadUpgrades();
+                SelectDefaultRoadTypes();
+            }
+            else
+            {
+                SetPathValue(GetDefaultOsmPath());
+                SetPriorityRoadNamesPathValue(GetDefaultOsmPath());
+                SetSimplifyToleranceValue(1d);
+                SetCurveToleranceValue(0.5d);
+                SetScaleFactorValue(1d);
+                SetMaxWaysValue(10000);
+                SetLayerElevationStepValue(10d);
+                SetBridgeElevationValue(10d);
+                SetTunnelDepthValue(10d);
+                SetCoveredDepthValue(5d);
+                SetEmbankmentElevationValue(3d);
+                SetCuttingDepthValue(3d);
+                SetIntersectionThresholdValue(8d);
+                SelectDefaultRoadUpgrades();
+                SelectDefaultRoadTypes();
+            }
+            BumpFieldVersion();
+            _lastAppliedSettingsHash = ComputeSettingsHash();
+        }
+
+        private int ComputeSettingsHash()
+        {
+            var s = Mod.Settings;
+            if (s == null)
+                return 0;
+
+            unchecked
+            {
+                var h = 17;
+                h = h * 31 + (s.DeveloperMode ? 1 : 0);
+                h = h * 31 + (s.DevLoadAndGenerateInOneClick ? 1 : 0);
+                h = h * 31 + (s.DefaultOsmPath?.GetHashCode() ?? 0);
+                h = h * 31 + (s.DefaultPriorityRoadNamesPath?.GetHashCode() ?? 0);
+                h = h * 31 + s.DefaultSimplifyTolerance.GetHashCode();
+                h = h * 31 + s.DefaultCurveTolerance.GetHashCode();
+                h = h * 31 + (s.DefaultImportMotorway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTrunk ? 1 : 0);
+                h = h * 31 + (s.DefaultImportPrimary ? 1 : 0);
+                h = h * 31 + (s.DefaultImportSecondary ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTertiary ? 1 : 0);
+                h = h * 31 + (s.DefaultImportUnclassified ? 1 : 0);
+                h = h * 31 + (s.DefaultImportResidential ? 1 : 0);
+                h = h * 31 + (s.DefaultImportService ? 1 : 0);
+                h = h * 31 + (s.DefaultImportLivingStreet ? 1 : 0);
+                h = h * 31 + (s.DefaultImportRoad ? 1 : 0);
+                h = h * 31 + (s.DefaultImportMotorwayLink ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTrunkLink ? 1 : 0);
+                h = h * 31 + (s.DefaultImportPrimaryLink ? 1 : 0);
+                h = h * 31 + (s.DefaultImportSecondaryLink ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTertiaryLink ? 1 : 0);
+                h = h * 31 + (s.DefaultImportFootway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportBridleway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportMonorail ? 1 : 0);
+                h = h * 31 + (s.DefaultImportRail ? 1 : 0);
+                h = h * 31 + (s.DefaultImportLightRail ? 1 : 0);
+                h = h * 31 + (s.DefaultImportSubway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTram ? 1 : 0);
+                h = h * 31 + (s.DefaultImportTrack ? 1 : 0);
+                h = h * 31 + (s.DefaultImportCycleway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportPedestrian ? 1 : 0);
+                h = h * 31 + s.DefaultScaleFactor.GetHashCode();
+                h = h * 31 + s.DefaultMaxWays.GetHashCode();
+                h = h * 31 + s.DefaultLayerElevationStep.GetHashCode();
+                h = h * 31 + s.DefaultBridgeElevation.GetHashCode();
+                h = h * 31 + s.DefaultTunnelDepth.GetHashCode();
+                h = h * 31 + s.DefaultCoveredDepth.GetHashCode();
+                h = h * 31 + s.DefaultEmbankmentElevation.GetHashCode();
+                h = h * 31 + s.DefaultCuttingDepth.GetHashCode();
+                h = h * 31 + s.DefaultIntersectionThreshold.GetHashCode();
+                h = h * 31 + (s.DefaultGenerateBikeLanes ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateRoadsideTrees ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateTurnRestrictions ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateCrosswalks ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateStopSigns ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateTrafficLights ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateRestrictedLanes ? 1 : 0);
+                return h;
+            }
+        }
+
         private void ResetDefaults()
         {
-            SetSimplifyToleranceValue(1d);
-            SetCurveToleranceValue(0.5d);
-            SetScaleFactorValue(1d);
-            SetMaxWaysValue(10000);
-            SetLayerElevationStepValue(10d);
-            SetBridgeElevationValue(10d);
-            SetTunnelDepthValue(10d);
-            SetCoveredDepthValue(10d);
-            SetEmbankmentElevationValue(3d);
-            SetCuttingDepthValue(3d);
+            ApplySettingsDefaults();
             ResetAdvancedSettingsSection();
             UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
         }
 
         private void ResetGenerateDefaults()
         {
-            SetIntersectionThresholdValue(8d);
-            SelectDefaultRoadUpgrades();
-            BumpFieldVersion();
+            ApplySettingsDefaults();
             children = BuildChildren();
             UpdateStatus(OsmLocalization.T("OsmImporter.Status.DefaultsRestored", "Defaults restored."));
         }
@@ -667,17 +797,77 @@ namespace cs2_osm_importer
 
         private void SelectDefaultRoadTypes(Dictionary<string, bool> selections)
         {
+            var settings = Mod.Settings;
+            if (settings != null)
+            {
+                foreach (var roadType in SupportedRoadTypes)
+                    selections[roadType] = GetDefaultImportSetting(settings, roadType);
+
+                BumpFieldVersion();
+                SyncRoadTypeFilterAdapters();
+                return;
+            }
+
+            // Settings unavailable: select all types
             foreach (var roadType in SupportedRoadTypes)
-                selections[roadType] = DefaultSelectedRoadTypes.Contains(roadType);
+                selections[roadType] = true;
 
             BumpFieldVersion();
             SyncRoadTypeFilterAdapters();
         }
 
+        private static bool GetDefaultImportSetting(OsmImporterSettings settings, string roadType)
+        {
+            // Map each SupportedRoadTypes entry to its corresponding settings property
+            switch (roadType)
+            {
+                case "motorway": return settings.DefaultImportMotorway;
+                case "trunk": return settings.DefaultImportTrunk;
+                case "primary": return settings.DefaultImportPrimary;
+                case "secondary": return settings.DefaultImportSecondary;
+                case "tertiary": return settings.DefaultImportTertiary;
+                case "unclassified": return settings.DefaultImportUnclassified;
+                case "residential": return settings.DefaultImportResidential;
+                case "service": return settings.DefaultImportService;
+                case "living_street": return settings.DefaultImportLivingStreet;
+                case "road": return settings.DefaultImportRoad;
+                case "motorway_link": return settings.DefaultImportMotorwayLink;
+                case "trunk_link": return settings.DefaultImportTrunkLink;
+                case "primary_link": return settings.DefaultImportPrimaryLink;
+                case "secondary_link": return settings.DefaultImportSecondaryLink;
+                case "tertiary_link": return settings.DefaultImportTertiaryLink;
+                case "footway": return settings.DefaultImportFootway;
+                case "bridleway": return settings.DefaultImportBridleway;
+                case "monorail": return settings.DefaultImportMonorail;
+                case "rail": return settings.DefaultImportRail;
+                case "light_rail": return settings.DefaultImportLightRail;
+                case "subway": return settings.DefaultImportSubway;
+                case "tram": return settings.DefaultImportTram;
+                case "track": return settings.DefaultImportTrack;
+                case "cycleway": return settings.DefaultImportCycleway;
+                case "pedestrian": return settings.DefaultImportPedestrian;
+                default: return true;
+            }
+        }
+
         private void SelectDefaultRoadUpgrades()
         {
-            foreach (var upgrade in SupportedRoadUpgrades)
-                _roadUpgradeSelections[upgrade.Key] = true;
+            var settings = Mod.Settings;
+            if (settings != null)
+            {
+                _roadUpgradeSelections["bikeLanes"] = settings.DefaultGenerateBikeLanes;
+                _roadUpgradeSelections["roadsideTrees"] = settings.DefaultGenerateRoadsideTrees;
+                _roadUpgradeSelections["turnRestrictions"] = settings.DefaultGenerateTurnRestrictions;
+                _roadUpgradeSelections["crosswalks"] = settings.DefaultGenerateCrosswalks;
+                _roadUpgradeSelections["stopSigns"] = settings.DefaultGenerateStopSigns;
+                _roadUpgradeSelections["trafficLights"] = settings.DefaultGenerateTrafficLights;
+                _roadUpgradeSelections["restrictedLanes"] = settings.DefaultGenerateRestrictedLanes;
+            }
+            else
+            {
+                foreach (var upgrade in SupportedRoadUpgrades)
+                    _roadUpgradeSelections[upgrade.Key] = true;
+            }
 
             BumpFieldVersion();
             SyncRoadTypeFilterAdapters();
@@ -800,6 +990,24 @@ namespace cs2_osm_importer
 
             if (_deleteButton != null)
                 _deleteButton.disabled = () => isGenerateSectionDisabled || !hasGeneratedAssets;
+
+            if (_devLoadAndGenerateButton != null)
+                _devLoadAndGenerateButton.disabled = () => isBusy || hasGeneratedAssets || _isPathInvalid || _isPriorityRoadNamesPathInvalid || _importRoadTypeSelections.Values.All(v => !v);
+        }
+
+        private void HandlePendingAutoGenerate()
+        {
+            if (!_pendingAutoGenerate || _importSystem == null || _importSystem.IsImporting)
+                return;
+
+            if (!_importSystem.HasLoadedData)
+            {
+                _pendingAutoGenerate = false;
+                return;
+            }
+
+            _pendingAutoGenerate = false;
+            GenerateRoads();
         }
 
         private void UpdateGeneratedState()

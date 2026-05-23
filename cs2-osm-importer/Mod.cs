@@ -38,6 +38,7 @@ namespace cs2_osm_importer
 
             Settings = new OsmImporterSettings(this);
             Settings.RegisterInOptionsUI();
+            Settings.RegisterKeyBindings();
             AssetDatabase.global.LoadSettings(Mod.Id, Settings, new OsmImporterSettings(this));
 
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);

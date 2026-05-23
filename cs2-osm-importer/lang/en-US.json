@@ -7,6 +7,7 @@
   "OsmImporter.Button.Cancel": "Cancel",
   "OsmImporter.Button.Continue": "Continue",
   "OsmImporter.Button.DeleteAllSegments": "Delete all segments",
+  "OsmImporter.Button.DevLoadAndGenerate": "DEV: Load & Generate",
   "OsmImporter.Button.GenerateRoads": "Generate Roads",
   "OsmImporter.Button.LoadOSMData": "Load OSM Data",
   "OsmImporter.Button.ResetDefaults": "Reset to defaults",
@@ -165,7 +166,10 @@
   "OsmImporter.Value.Unknown": "unknown",
   "Options.OPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DeveloperMode]": "Developer Mode",
   "Options.OPTION_DESCRIPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DeveloperMode]": "Enables debug UI bindings and developer-only features for the OSM Importer mod.",
+  "Options.OPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DevLoadAndGenerateInOneClick]": "Load & generate in one click",
+  "Options.OPTION_DESCRIPTION[cs2_osm_importer.cs2_osm_importer.Mod.OsmImporterSettings.DevLoadAndGenerateInOneClick]": "When enabled, adds a 'DEV: Load & Generate' button to the panel that loads OSM data and immediately starts road generation.",
   "Options.SECTION[cs2_osm_importer.cs2_osm_importer.Mod]": "OSM Importer",
   "Options.TAB[cs2_osm_importer.cs2_osm_importer.Mod.Settings]": "Settings",
-  "Options.GROUP[cs2_osm_importer.cs2_osm_importer.Mod.Developer]": "Developer"
+  "Options.GROUP[cs2_osm_importer.cs2_osm_importer.Mod.Developer]": "Developer",
+  "Options.INPUT_ACTION[cs2_osm_importer.ToggleOSMImporterTool]": "Toggle OSM Importer Panel"
 }

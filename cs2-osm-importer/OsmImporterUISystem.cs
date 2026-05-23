@@ -35,8 +35,14 @@ namespace cs2_osm_importer
 
             _status = new ValueBinding<string>(Mod.Id, "importStatus", OsmLocalization.T("OsmImporter.Status.Ready", "Ready."), ValueWriters.Create<string>());
             _importing = new ValueBinding<bool>(Mod.Id, "isImporting", false, ValueWriters.Create<bool>());
-            _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
-            _defaultPriorityRoadNamesPath = new ValueBinding<string>(Mod.Id, "defaultPriorityRoadNamesPath", GetDefaultOsmPath(), ValueWriters.Create<string>());
+            var defaultOsmPath = Mod.Settings != null && !string.IsNullOrWhiteSpace(Mod.Settings.DefaultOsmPath)
+                ? Mod.Settings.DefaultOsmPath
+                : GetDefaultOsmPath();
+            var defaultPriorityRoadNamesPath = Mod.Settings != null && !string.IsNullOrWhiteSpace(Mod.Settings.DefaultPriorityRoadNamesPath)
+                ? Mod.Settings.DefaultPriorityRoadNamesPath
+                : GetDefaultOsmPath();
+            _defaultOsmPath = new ValueBinding<string>(Mod.Id, "defaultOsmPath", defaultOsmPath, ValueWriters.Create<string>());
+            _defaultPriorityRoadNamesPath = new ValueBinding<string>(Mod.Id, "defaultPriorityRoadNamesPath", defaultPriorityRoadNamesPath, ValueWriters.Create<string>());
             _hasLoadedData = new ValueBinding<bool>(Mod.Id, "hasLoadedData", false, ValueWriters.Create<bool>());
             _roadTypeCounts = new ValueBinding<string>(Mod.Id, "roadTypeCounts", "{}", ValueWriters.Create<string>());
 
