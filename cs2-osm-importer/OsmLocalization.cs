@@ -113,8 +113,6 @@ namespace cs2_osm_importer
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultIntersectionThreshold]", "Default value for the intersection threshold field (1-20m)." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateBikeLanes]", "Default: generate bike lanes" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateBikeLanes]", "Default state for the bike lanes toggle in the generate panel." },
-            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateRoadsideTrees]", "Default: generate roadside trees" },
-            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateRoadsideTrees]", "Default state for the roadside trees toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateTurnRestrictions]", "Default: generate turn restrictions" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateTurnRestrictions]", "Default state for the turn restrictions toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateCrosswalks]", "Default: generate crosswalks" },

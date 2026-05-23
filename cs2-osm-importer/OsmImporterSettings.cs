@@ -224,9 +224,6 @@ namespace cs2_osm_importer
         public bool DefaultGenerateBikeLanes { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
-        public bool DefaultGenerateRoadsideTrees { get; set; } = true;
-
-        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
         public bool DefaultGenerateTurnRestrictions { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
@@ -325,7 +322,6 @@ namespace cs2_osm_importer
         {
             DefaultIntersectionThreshold = 8f;
             DefaultGenerateBikeLanes = true;
-            DefaultGenerateRoadsideTrees = true;
             DefaultGenerateTurnRestrictions = true;
             DefaultGenerateCrosswalks = true;
             DefaultGenerateStopSigns = true;

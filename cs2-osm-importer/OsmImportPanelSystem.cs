@@ -109,7 +109,6 @@ namespace cs2_osm_importer
         private static readonly (string Key, string LabelKey, string LabelFallback)[] SupportedRoadUpgrades =
         {
             ("bikeLanes", "OsmImporter.Label.GenerateBikeLanes", "Bike lanes"),
-            ("roadsideTrees", "OsmImporter.Label.GenerateRoadsideTrees", "Roadside trees"),
             ("turnRestrictions", "OsmImporter.Label.GenerateTurnRestrictions", "Turn restrictions"),
             ("crosswalks", "OsmImporter.Label.GenerateCrosswalks", "Crosswalks"),
             ("stopSigns", "OsmImporter.Label.GenerateStopSigns", "Stop signs"),
@@ -625,7 +624,6 @@ namespace cs2_osm_importer
             {
                 IntersectionThresholdMeters = (float)_intersectionThresholdValue,
                 GenerateBikeLanes = IsRoadUpgradeSelected("bikeLanes"),
-                GenerateRoadsideTrees = IsRoadUpgradeSelected("roadsideTrees"),
                 GenerateTurnRestrictions = IsRoadUpgradeSelected("turnRestrictions"),
                 GenerateCrosswalks = IsRoadUpgradeSelected("crosswalks"),
                 GenerateStopSigns = IsRoadUpgradeSelected("stopSigns"),
@@ -766,7 +764,6 @@ namespace cs2_osm_importer
                 h = h * 31 + s.DefaultCuttingDepth.GetHashCode();
                 h = h * 31 + s.DefaultIntersectionThreshold.GetHashCode();
                 h = h * 31 + (s.DefaultGenerateBikeLanes ? 1 : 0);
-                h = h * 31 + (s.DefaultGenerateRoadsideTrees ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateTurnRestrictions ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateCrosswalks ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateStopSigns ? 1 : 0);
@@ -856,7 +853,6 @@ namespace cs2_osm_importer
             if (settings != null)
             {
                 _roadUpgradeSelections["bikeLanes"] = settings.DefaultGenerateBikeLanes;
-                _roadUpgradeSelections["roadsideTrees"] = settings.DefaultGenerateRoadsideTrees;
                 _roadUpgradeSelections["turnRestrictions"] = settings.DefaultGenerateTurnRestrictions;
                 _roadUpgradeSelections["crosswalks"] = settings.DefaultGenerateCrosswalks;
                 _roadUpgradeSelections["stopSigns"] = settings.DefaultGenerateStopSigns;

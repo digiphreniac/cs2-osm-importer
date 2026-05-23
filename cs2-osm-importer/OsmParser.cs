@@ -347,9 +347,7 @@ namespace cs2_osm_importer
             var parkingRightTag = string.Empty;
             var parkingBothTag = string.Empty;
             var hasBikeLanes = false;
-            var hasRoadsideTrees = false;
             var bikeLaneSide = OsmRoadFeatureSide.None;
-            var roadsideTreeSide = OsmRoadFeatureSide.None;
             var hasDesignatedBusLanes = false;
             var designatedBusLaneSide = OsmRoadFeatureSide.None;
             var hasBroadBusDesignation = false;
@@ -441,11 +439,6 @@ namespace cs2_osm_importer
                         hasBikeLanes = true;
                         bikeLaneSide = MergeRoadFeatureSide(bikeLaneSide, parsedBikeLaneSide);
                     }
-                    else if (IsRoadsideTreeTag(key, value))
-                    {
-                        hasRoadsideTrees = true;
-                        roadsideTreeSide = MergeRoadFeatureSide(roadsideTreeSide, ParseRoadFeatureSide(key));
-                    }
                     else if (TryParseDesignatedBusLaneTag(key, value, out var parsedBusLaneSide))
                     {
                         hasDesignatedBusLanes = true;
@@ -521,11 +514,9 @@ namespace cs2_osm_importer
             way.ParkingSide = parkingSide;
             way.ParkingStyle = parkingStyle;
             way.HasBikeLanes = hasBikeLanes;
-            way.HasRoadsideTrees = hasRoadsideTrees;
             way.HasTurnRestrictions = turnRestrictionsByWayId != null && turnRestrictionsByWayId.ContainsKey(way.Id);
             way.HasRestrictedLanes = hasDesignatedBusLanes || hasBroadBusDesignation;
             way.BikeLaneSide = NormalizeDetectedSide(bikeLaneSide, way.HasBikeLanes);
-            way.RoadsideTreeSide = NormalizeDetectedSide(roadsideTreeSide, way.HasRoadsideTrees);
             way.RestrictedLaneSide = hasDesignatedBusLanes
                 ? NormalizeDetectedSide(designatedBusLaneSide, true)
                 : NormalizeDetectedSide(hasBroadBusDesignation ? OsmRoadFeatureSide.Both : OsmRoadFeatureSide.None, way.HasRestrictedLanes);
@@ -1228,20 +1219,6 @@ namespace cs2_osm_importer
             return side == OsmRoadFeatureSide.None ? OsmRoadFeatureSide.Both : side;
         }
 
-        private static bool IsRoadsideTreeTag(string key, string value)
-        {
-            key = (key ?? string.Empty).Trim().ToLowerInvariant();
-            value = (value ?? string.Empty).Trim().ToLowerInvariant();
-            if (string.IsNullOrEmpty(key) || IsFalsey(value))
-                return false;
-
-            return key == "tree_lined" ||
-                   key == "tree_lined:left" ||
-                   key == "tree_lined:right" ||
-                   key == "tree_lined:both" ||
-                   (key == "natural" && value == "tree_row");
-        }
-
         private static bool IsBroadBusDesignationTag(string key, string value)
         {
             key = (key ?? string.Empty).Trim().ToLowerInvariant();
@@ -1675,11 +1652,9 @@ namespace cs2_osm_importer
                 ParkingSide = way.ParkingSide,
                 ParkingStyle = way.ParkingStyle,
                 HasBikeLanes = way.HasBikeLanes,
-                HasRoadsideTrees = way.HasRoadsideTrees,
                 HasTurnRestrictions = way.HasTurnRestrictions,
                 HasRestrictedLanes = way.HasRestrictedLanes,
                 BikeLaneSide = way.BikeLaneSide,
-                RoadsideTreeSide = way.RoadsideTreeSide,
                 RestrictedLaneSide = way.RestrictedLaneSide,
                 IsRoundabout = way.IsRoundabout
             };
@@ -1741,11 +1716,9 @@ namespace cs2_osm_importer
                 ParkingSide = ways[0].ParkingSide,
                 ParkingStyle = ways[0].ParkingStyle,
                 HasBikeLanes = ways[0].HasBikeLanes,
-                HasRoadsideTrees = ways[0].HasRoadsideTrees,
                 HasTurnRestrictions = ways[0].HasTurnRestrictions,
                 HasRestrictedLanes = ways[0].HasRestrictedLanes,
                 BikeLaneSide = ways[0].BikeLaneSide,
-                RoadsideTreeSide = ways[0].RoadsideTreeSide,
                 RestrictedLaneSide = ways[0].RestrictedLaneSide,
                 IsRoundabout = ways[0].IsRoundabout
             };
@@ -1811,11 +1784,9 @@ namespace cs2_osm_importer
                     merged.ParkingStyle = way.ParkingStyle;
 
                 merged.HasBikeLanes |= way.HasBikeLanes;
-                merged.HasRoadsideTrees |= way.HasRoadsideTrees;
                 merged.HasTurnRestrictions |= way.HasTurnRestrictions;
                 merged.HasRestrictedLanes |= way.HasRestrictedLanes;
                 merged.BikeLaneSide = MergeRoadFeatureSide(merged.BikeLaneSide, way.BikeLaneSide);
-                merged.RoadsideTreeSide = MergeRoadFeatureSide(merged.RoadsideTreeSide, way.RoadsideTreeSide);
                 merged.RestrictedLaneSide = MergeRoadFeatureSide(merged.RestrictedLaneSide, way.RestrictedLaneSide);
             }
 
@@ -2401,7 +2372,7 @@ namespace cs2_osm_importer
             if (string.IsNullOrWhiteSpace(roadLabel))
                 return string.Empty;
 
-            return $"{way.Highway.Trim()}|{roadLabel}|{way.Lanes}|{way.LanesForward}|{way.LanesBackward}|{way.LanesBothWays}|{way.ParkingSide}|{way.ParkingStyle}|{way.HasBikeLanes}|{way.HasRoadsideTrees}|{way.HasTurnRestrictions}|{way.HasRestrictedLanes}";
+            return $"{way.Highway.Trim()}|{roadLabel}|{way.Lanes}|{way.LanesForward}|{way.LanesBackward}|{way.LanesBothWays}|{way.ParkingSide}|{way.ParkingStyle}|{way.HasBikeLanes}|{way.HasTurnRestrictions}|{way.HasRestrictedLanes}";
         }
 
         private static bool IsSupportedHighway(string highway)

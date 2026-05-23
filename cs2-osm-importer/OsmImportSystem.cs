@@ -180,7 +180,6 @@ namespace cs2_osm_importer
                 return;
 
             var bikeLaneWays = document.Ways.Count(way => way.HasBikeLanes);
-            var treeWays = document.Ways.Count(way => way.HasRoadsideTrees);
             var restrictedLaneWays = document.Ways.Count(way => way.HasRestrictedLanes);
             var turnRestrictionWays = document.Ways.Count(way => way.HasTurnRestrictions);
             var crosswalkNodes = document.Ways.Sum(way => way.Crosswalks.Select(feature => feature.NodeId).Distinct().Count());
@@ -188,7 +187,7 @@ namespace cs2_osm_importer
             var trafficLightNodes = document.Ways.Sum(way => way.TrafficLights.Select(feature => feature.NodeId).Distinct().Count());
 
             Mod.log.Info(
-                $"Loaded OSM road feature data: bikeLanes={bikeLaneWays} ways, roadsideTrees={treeWays} ways, " +
+                $"Loaded OSM road feature data: bikeLanes={bikeLaneWays} ways, " +
                 $"restrictedBusLanes={restrictedLaneWays} ways, turnRestrictions={turnRestrictionWays} ways, " +
                 $"crosswalkNodes={crosswalkNodes}, stopSignNodes={stopSignNodes}, trafficLightNodes={trafficLightNodes}.");
         }
@@ -198,8 +197,8 @@ namespace cs2_osm_importer
             if (options == null)
                 return "all enabled";
 
-            return $"bikeLanes={options.GenerateBikeLanes}, roadsideTrees={options.GenerateRoadsideTrees}, " +
-                   $"turnRestrictions={options.GenerateTurnRestrictions}, crosswalks={options.GenerateCrosswalks}, " +
+            return $"bikeLanes={options.GenerateBikeLanes}, turnRestrictions={options.GenerateTurnRestrictions}, " +
+                   $"crosswalks={options.GenerateCrosswalks}, " +
                    $"stopSigns={options.GenerateStopSigns}, trafficLights={options.GenerateTrafficLights}, " +
                    $"restrictedBusLanes={options.GenerateRestrictedLanes}";
         }
@@ -1639,9 +1638,6 @@ namespace cs2_osm_importer
                 if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateBikeLanes)
                     AddSideFlags(ref flags, way.BikeLaneSide, CompositionFlags.Side.SecondaryLane);
 
-                if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateRoadsideTrees)
-                    AddSideFlags(ref flags, way.RoadsideTreeSide, CompositionFlags.Side.PrimaryBeautification);
-
                 if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateRestrictedLanes)
                     AddSideFlags(ref flags, way.RestrictedLaneSide, CompositionFlags.Side.PrimaryLane);
 
@@ -2959,8 +2955,6 @@ namespace cs2_osm_importer
 
             public TriState BikeLanes { get; set; }
 
-            public TriState RoadsideTrees { get; set; }
-
             public TriState TurnRestrictions { get; set; }
 
             public TriState Crosswalks { get; set; }
@@ -2989,8 +2983,7 @@ namespace cs2_osm_importer
                        MatchesTriState(Tunnel, way.IsTunnel) &&
                        MatchesOneWay(OneWay, way.OneWayDirection) &&
                        MatchesTriState(BikeLanes, (options == null || options.GenerateBikeLanes) && way.HasBikeLanes) &&
-                       MatchesTriState(RoadsideTrees, (options == null || options.GenerateRoadsideTrees) && way.HasRoadsideTrees) &&
-                       MatchesTriState(TurnRestrictions, (options == null || options.GenerateTurnRestrictions) && way.HasTurnRestrictions) &&
+                        MatchesTriState(TurnRestrictions, (options == null || options.GenerateTurnRestrictions) && way.HasTurnRestrictions) &&
                        MatchesTriState(Crosswalks, (options == null || options.GenerateCrosswalks) && way.Crosswalks.Count > 0) &&
                        MatchesTriState(StopSigns, (options == null || options.GenerateStopSigns) && way.StopSigns.Count > 0) &&
                        MatchesTriState(TrafficLights, (options == null || options.GenerateTrafficLights) && way.TrafficLights.Count > 0) &&
@@ -3035,7 +3028,6 @@ namespace cs2_osm_importer
                 if (Tunnel != TriState.Any) score++;
                 if (OneWay != OneWayBucket.Any) score++;
                 if (BikeLanes != TriState.Any) score++;
-                if (RoadsideTrees != TriState.Any) score++;
                 if (TurnRestrictions != TriState.Any) score++;
                 if (Crosswalks != TriState.Any) score++;
                 if (StopSigns != TriState.Any) score++;
@@ -3251,7 +3243,6 @@ namespace cs2_osm_importer
                     Tunnel = ParseTriState(dict.Tunnel),
                     OneWay = ParseOneWayBucket(dict.OneWay),
                     BikeLanes = ParseTriState(dict.BikeLanes),
-                    RoadsideTrees = ParseTriState(dict.RoadsideTrees),
                     TurnRestrictions = ParseTriState(dict.TurnRestrictions),
                     Crosswalks = ParseTriState(dict.Crosswalks),
                     StopSigns = ParseTriState(dict.StopSigns),
@@ -3319,9 +3310,6 @@ namespace cs2_osm_importer
 
             [DataMember(Name = "bikeLanes")]
             public string BikeLanes { get; set; }
-
-            [DataMember(Name = "roadsideTrees")]
-            public string RoadsideTrees { get; set; }
 
             [DataMember(Name = "turnRestrictions")]
             public string TurnRestrictions { get; set; }

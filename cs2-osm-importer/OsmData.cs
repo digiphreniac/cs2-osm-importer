@@ -66,7 +66,6 @@ namespace cs2_osm_importer
         public HashSet<string> HighwayTypes { get; } = new HashSet<string>();
         public float IntersectionThresholdMeters { get; set; } = 8f;
         public bool GenerateBikeLanes { get; set; } = true;
-        public bool GenerateRoadsideTrees { get; set; } = true;
         public bool GenerateTurnRestrictions { get; set; } = true;
         public bool GenerateCrosswalks { get; set; } = true;
         public bool GenerateStopSigns { get; set; } = true;
@@ -123,11 +122,9 @@ namespace cs2_osm_importer
         public OsmParkingSideType ParkingSide { get; set; }
         public OsmParkingStyleType ParkingStyle { get; set; }
         public bool HasBikeLanes { get; set; }
-        public bool HasRoadsideTrees { get; set; }
         public bool HasTurnRestrictions { get; set; }
         public bool HasRestrictedLanes { get; set; }
         public OsmRoadFeatureSide BikeLaneSide { get; set; }
-        public OsmRoadFeatureSide RoadsideTreeSide { get; set; }
         public OsmRoadFeatureSide RestrictedLaneSide { get; set; }
         public List<long> NodeIds { get; } = new List<long>();
         public List<float> TerrainHeights { get; } = new List<float>();
