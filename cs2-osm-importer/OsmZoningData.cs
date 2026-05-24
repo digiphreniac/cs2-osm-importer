@@ -11,6 +11,8 @@ namespace cs2_osm_importer
         public long Id { get; set; }
         public ZoningType Type { get; set; }
         public DensityLevel Density { get; set; } = DensityLevel.Low;
+        // Nullable override: when null, use inferred Density
+        public DensityLevel? DensityOverride { get; set; } = null;
         public SchoolType InferredSchoolType { get; set; } = SchoolType.Unknown;
         public string Name { get; set; } = string.Empty;
         public Dictionary<string, string> Tags { get; } = new Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase);
