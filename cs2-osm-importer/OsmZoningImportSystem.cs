@@ -5,13 +5,17 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Unity.Entities;
+using Unity.Mathematics;
 
 namespace cs2_osm_importer
 {
     public partial class OsmZoningImportSystem : GameSystemBase
     {
         private OsmZoningDocument _lastPreview;
-        public void LoadZoningFromFile(string path)
+        private double _anchorLat = 0.0;
+        private double _anchorLon = 0.0;
+
+        public void LoadZoningFromFile(string path)
         {
             Mod.log.Info($"OSM zoning: requested load for '{path}'");
             if (string.IsNullOrWhiteSpace(path))
@@ -24,7 +28,10 @@ namespace cs2_osm_importer
             {
                 var doc = OsmZoningParser.Parse(path);
                 _lastPreview = doc;
-                Mod.log.Info($"OSM zoning: parsed {doc.Features.Count} features (preview stored in memory).");
+                _anchorLat = doc.Features.Count > 0 ? doc.Features.Average(f => f.CentroidLat) : 0.0;
+                _anchorLon = doc.Features.Count > 0 ? doc.Features.Average(f => f.CentroidLon) : 0.0;
+                
+                Mod.log.Info($"OSM zoning: parsed {doc.Features.Count} features (preview stored in memory). Map anchor: ({_anchorLat:F6}, {_anchorLon:F6})");
 
                 // Optionally write a JSON preview to the mod directory or temp directory.
                 var outDir = string.IsNullOrWhiteSpace(Mod.ModDirectory) ? Path.GetTempPath() : Mod.ModDirectory;
@@ -100,7 +107,7 @@ namespace cs2_osm_importer
         }
 
         // Apply zoning into the running game. This operation must be performed while the city is running (Play mode).
-        // The real integration with the game's zoning APIs needs to run in a safe context; this method is a guarded entry point.
+        // Uses coordinate mapping and reflection-based API calls to avoid compile-time coupling.
         public void ApplyZoning()
         {
             if (_lastPreview == null)
@@ -129,15 +136,30 @@ namespace cs2_osm_importer
                 return;
             }
 
-            // Iterate features and apply zoning. Actual game API calls are TODO; log intended actions for now.
+            // Iterate features, map coordinates, and apply zoning.
+            int appliedCount = 0;
+            int failedCount = 0;
             foreach (var f in _lastPreview.Features)
             {
-                var effectiveDensity = f.DensityOverride ?? f.Density;
-                Mod.log.Info($"OSM zoning: would apply {f.Type} at ({f.CentroidLat:F6},{f.CentroidLon:F6}) with density {effectiveDensity} (feature {f.Id})");
-                // TODO: translate lat/lon centroid to game world coordinates and call zoning API to set zone and density.
+                try
+                {
+                    var effectiveDensity = f.DensityOverride ?? f.Density;
+                    
+                    // Map lat/lon centroid to game world coordinates
+                    var worldPos = ZoningCoordinateMapper.LatLonToWorldCoords(f.CentroidLat, f.CentroidLon, _anchorLat, _anchorLon);
+                    
+                    // Apply zoning via reflection-based API
+                    ZoningApplier.ApplyZoneAtPosition(worldPos, f.Type, effectiveDensity);
+                    appliedCount++;
+                }
+                catch (Exception ex)
+                {
+                    Mod.log.Warning($"OSM zoning: failed to apply zone for feature {f.Id}: {ex.Message}");
+                    failedCount++;
+                }
             }
 
-            Mod.log.Info("OSM zoning: ApplyZoning completed (logged). Implement actual game zoning API calls in code.");
+            Mod.log.Info($"OSM zoning: ApplyZoning completed. Applied: {appliedCount}, Failed: {failedCount}");
         }
     }
-}
+}
