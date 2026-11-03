@@ -27,6 +27,8 @@ namespace cs2_osm_importer
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DeveloperMode]", "Enables debug UI bindings and developer-only features for the OSM Importer mod." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DevLoadAndGenerateInOneClick]", "Load & generate in one click" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DevLoadAndGenerateInOneClick]", "When enabled, adds a 'DEV: Load & Generate' button to the panel that loads OSM data and immediately starts road generation." },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.WriteGeometryReport]", "Write geometry report" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.WriteGeometryReport]", "Compares the generated roads against the queued segments and the original OSM geometry, and writes the results to ModsData/cs2_osm_importer/geometry-reports. Developer Mode also writes this report automatically after each generation." },
             { $"Options.INPUT_ACTION[{Mod.Id}.{Mod.ButtonActionName}]", "Toggle OSM Importer Panel" },
             { "OsmImporter.Button.DevLoadAndGenerate", "DEV: Load & Generate" },
             // Defaults tab info

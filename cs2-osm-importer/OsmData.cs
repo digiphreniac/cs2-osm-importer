@@ -99,6 +99,10 @@ namespace cs2_osm_importer
         public float3 Max { get; set; }
         public float3 OriginOffset { get; set; }
         public bool HasBounds { get; set; }
+
+        // Projected XZ position (meters, scale applied) of every road node, before interpolation,
+        // simplification or way merging. Used as ground truth by the geometry report.
+        public Dictionary<long, float2> SourceNodePositions { get; } = new Dictionary<long, float2>();
     }
 
     internal sealed class OsmWay

@@ -132,6 +132,16 @@ namespace cs2_osm_importer
                 document.CenterLon = center.Lon;
             }
 
+            foreach (var nodeId in roadNodeIds)
+            {
+                if (nodes.TryGetValue(nodeId, out var node))
+                {
+                    document.SourceNodePositions[nodeId] = new float2(
+                        (float)(node.X * options.ScaleFactor),
+                        (float)(node.Y * options.ScaleFactor));
+                }
+            }
+
             turnRestrictionsByWayId = ReadTurnRestrictions(xml, nodes, options, sampleHeight);
 
             var parsedWays = new List<OsmWay>();

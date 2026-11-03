@@ -52,6 +52,14 @@ namespace cs2_osm_importer
             set => _devLoadAndGenerateInOneClick = _developerMode && value;
         }
 
+        [SettingsUIButton]
+        [SettingsUISection(SETTINGS, DEVELOPER)]
+        [SettingsUIHideByCondition(typeof(OsmImporterSettings), nameof(IsDeveloperModeOff))]
+        public bool WriteGeometryReport
+        {
+            set => OsmImportSystem.GeometryReportRequested = true;
+        }
+
         [SettingsUIKeyboardBinding(actionName: Mod.ButtonActionName)]
         [SettingsUIHidden]
         public ProxyBinding TogglePanel { get; set; }

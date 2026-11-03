@@ -225,6 +225,7 @@ namespace cs2_osm_importer
         protected override void OnUpdate()
         {
             LogPrefabCatalogOnce();
+            UpdateGeometryReportRequests();
 
             if (!IsImporting)
                 return;
@@ -753,6 +754,7 @@ namespace cs2_osm_importer
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
                     Complete(message);
+                    ScheduleAutoGeometryReport();
                     return;
                 }
 
@@ -794,6 +796,7 @@ namespace cs2_osm_importer
                     Mod.log.Info($"{fallbackMessage} Session {_sessionId}");
                     HasGeneratedAssets = true;
                     Complete(fallbackMessage);
+                    ScheduleAutoGeometryReport();
                 }
             }
             catch (Exception ex)
