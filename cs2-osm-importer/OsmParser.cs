@@ -25,7 +25,7 @@ namespace cs2_osm_importer
         /// failures on the UW campus crop, e.g. a stop-line node 0.57 m from a junction). Merged nodes produce
         /// zero-length segments instead, which are skipped without leaving a gap.
         /// Consecutive nodes of one way always merge; nodes of different ways merge only when neither is on a
-        /// bridge/tunnel/covered/layer way, so a structure is never joined to the road under it.
+        /// bridge or (underground) tunnel, so a structure is never joined to the road under it.
         /// </summary>
         private static void MergeCloseRoadNodes(Dictionary<long, GeoNode> nodes, List<XmlElement> wayElements, HashSet<long> roadNodeIds, double minDistance)
         {
@@ -60,8 +60,8 @@ namespace cs2_osm_importer
                     {
                         var key = tag.GetAttribute("k");
                         var value = tag.GetAttribute("v");
-                        if ((key == "bridge" || key == "tunnel" || key == "covered") && !IsFalsey(value) ||
-                            key == "layer" && value != "0" && value.Length > 0)
+                        // Same rule as EstimateBaseElevationOffset: only real bridges and tunnels leave the ground.
+                        if (key == "bridge" && IsBridgeValue(value) || key == "tunnel" && IsTunnelValue(value))
                             isStructure = true;
                     }
                 }
@@ -520,9 +520,9 @@ namespace cs2_osm_importer
                         bothWaysLaneCount = parsedBothWaysLaneCount;
                     }
                     else if (key == "bridge")
-                        isBridge = IsTruthy(value);
+                        isBridge = IsBridgeValue(value);
                     else if (key == "tunnel")
-                        isTunnel = IsTruthy(value);
+                        isTunnel = IsTunnelValue(value);
                     else if (key == "oneway")
                     {
                         var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
@@ -623,7 +623,7 @@ namespace cs2_osm_importer
                 isCovered,
                 isEmbankment,
                 isCutting);
-            way.UsesStructuralElevation = ((hasLayer && layer != 0) || isBridge || isTunnel || isCovered || isEmbankment || isCutting) &&
+            way.UsesStructuralElevation = (isBridge || isTunnel || isEmbankment || isCutting) &&
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
@@ -3334,17 +3334,18 @@ namespace cs2_osm_importer
         {
             var offset = 0f;
 
-            if (hasLayer && layer != 0)
+            // Only real bridges and tunnels leave the ground. layer=* alone means "drawn above/below something
+            // else" (covered walkways, paths over a culvert, floors of a building passage), and covered=yes is a roof
+            // over a way at street level. Treating those as +-10 m put ground ways in the air or underground, and
+            // connecting them to the ground network forced steep ramps (tall elevated stubs on the UW campus crop).
+            // layer still sets the height of a bridge or tunnel (layer 2 bridge = two steps up).
+            if (isBridge)
             {
-                offset += layer * options.LayerElevationStepMeters;
+                offset += hasLayer && layer > 0 ? layer * options.LayerElevationStepMeters : options.BridgeElevationMeters;
             }
-            else if (isBridge)
+            else if (isTunnel)
             {
-                offset += options.BridgeElevationMeters;
-            }
-            else if (isTunnel || isCovered)
-            {
-                offset -= isTunnel ? options.TunnelDepthMeters : options.CoveredDepthMeters;
+                offset -= hasLayer && layer < 0 ? -layer * options.LayerElevationStepMeters : options.TunnelDepthMeters;
             }
 
             if (isEmbankment)
@@ -3357,6 +3358,27 @@ namespace cs2_osm_importer
                 offset += options.LayerElevationStepMeters;
 
             return offset;
+        }
+
+        // bridge=yes/viaduct/boardwalk/movable/cantilever/trestle/... all mean a bridge (IsTruthy only accepted yes/true/1).
+        private static bool IsBridgeValue(string value) =>
+            !string.IsNullOrWhiteSpace(value) && !IsFalsey(value);
+
+        // A tunnel that goes underground. building_passage (through a building at street level), covered (a roof
+        // over the way) and avalanche_protector (a gallery on the surface) are at ground level.
+        private static bool IsTunnelValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || IsFalsey(value))
+                return false;
+            switch (value.Trim().ToLowerInvariant())
+            {
+                case "building_passage":
+                case "covered":
+                case "avalanche_protector":
+                    return false;
+                default:
+                    return true;
+            }
         }
 
         private static bool IsElevatedRailType(string type)
