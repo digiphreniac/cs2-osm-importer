@@ -1913,34 +1913,52 @@ namespace cs2_osm_importer
                         if (ApproximatelyEqual(wayA.BaseElevationOffsetMeters, wayB.BaseElevationOffsetMeters))
                             continue;
 
-                        var higherWay = wayA.BaseElevationOffsetMeters > wayB.BaseElevationOffsetMeters ? wayA : wayB;
-                        var lowerWay = wayA.BaseElevationOffsetMeters > wayB.BaseElevationOffsetMeters ? wayB : wayA;
-                        var isLowerStart = higherWay == wayA ? entries[b].isStart : entries[a].isStart;
+                        // Ramp the STRUCTURAL way (the one further from ground level, e.g. a bridge or tunnel) so
+                        // its end meets the neighbour's height. Ramping the neighbour instead (the old behaviour for
+                        // bridges) lifted ordinary roads; on roads shorter than the ramp, or with a junction inside
+                        // it, the shared junction node ended up metres above the crossing road, and CS2 built two
+                        // unconnected nodes there (unjoined T-junctions).
+                        var structuralIsA = math.abs(wayA.BaseElevationOffsetMeters) > math.abs(wayB.BaseElevationOffsetMeters);
+                        var structuralWay = structuralIsA ? wayA : wayB;
+                        var neighbourWay = structuralIsA ? wayB : wayA;
+                        var isStructuralStart = structuralIsA ? entries[a].isStart : entries[b].isStart;
 
-                        var delta = higherWay.BaseElevationOffsetMeters - lowerWay.BaseElevationOffsetMeters;
-                        var startIdx = isLowerStart ? 0 : lowerWay.Points.Count - 1;
-                        var step = isLowerStart ? 1 : -1;
+                        // Height change at the shared end: bring the structure down (bridge) or up (tunnel)
+                        // to the neighbour's offset.
+                        var delta = neighbourWay.BaseElevationOffsetMeters - structuralWay.BaseElevationOffsetMeters;
+                        var startIdx = isStructuralStart ? 0 : structuralWay.Points.Count - 1;
+                        var step = isStructuralStart ? 1 : -1;
+
+                        // Ramps from both ends must not overlap, or they would overshoot past the neighbour height.
+                        var structuralLength = 0f;
+                        for (var k = 1; k < structuralWay.Points.Count; k++)
+                        {
+                            structuralLength += math.distance(
+                                new float2(structuralWay.Points[k - 1].x, structuralWay.Points[k - 1].z),
+                                new float2(structuralWay.Points[k].x, structuralWay.Points[k].z));
+                        }
+                        var rampLength = math.max(1f, math.min(RampLengthMeters, structuralLength * 0.5f));
 
                         var accumulated = 0f;
                         var idx = startIdx;
-                        while (idx >= 0 && idx < lowerWay.Points.Count)
+                        while (idx >= 0 && idx < structuralWay.Points.Count)
                         {
                             if (idx != startIdx)
                             {
                                 var prev = idx - step;
                                 accumulated += math.distance(
-                                    new float2(lowerWay.Points[prev].x, lowerWay.Points[prev].z),
-                                    new float2(lowerWay.Points[idx].x, lowerWay.Points[idx].z));
+                                    new float2(structuralWay.Points[prev].x, structuralWay.Points[prev].z),
+                                    new float2(structuralWay.Points[idx].x, structuralWay.Points[idx].z));
                             }
 
-                            var t = math.saturate(accumulated / RampLengthMeters);
+                            var t = math.saturate(accumulated / rampLength);
                             var weight = 1f - (t * t * (3f - 2f * t));
                             if (weight < 0.001f)
                                 break;
 
-                            var p = lowerWay.Points[idx];
+                            var p = structuralWay.Points[idx];
                             p.y += delta * weight;
-                            lowerWay.Points[idx] = p;
+                            structuralWay.Points[idx] = p;
 
                             idx += step;
                         }
@@ -2561,7 +2579,11 @@ namespace cs2_osm_importer
             for (var i = 1; i <= subdivisions; i++)
             {
                 var t = i / (float)subdivisions;
-                var point = math.lerp(startPoint, endPoint, t);
+                // The last point must be the OSM node itself, bit for bit: lerp at t = 1 (start + (end - start) * 1)
+                // can be one float step off, and the same shared node reached from a different start point then
+                // differs between ways. CS2 only joins coincident course points, so the junction got two unconnected
+                // nodes (unjoined T-junctions).
+                var point = i == subdivisions ? endPoint : math.lerp(startPoint, endPoint, t);
                 point.y = sampleHeight(point);
                 points.Add(point);
                 terrainHeights.Add(point.y);
