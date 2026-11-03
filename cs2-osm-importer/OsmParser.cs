@@ -284,6 +284,7 @@ namespace cs2_osm_importer
             HarmonizeGroupElevations(finalWays);
             ConvertRoundabouts(finalWays, sampleHeight);
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
+            UnifySharedPoints(finalWays);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
@@ -2365,6 +2366,51 @@ namespace cs2_osm_importer
             bestRoad.Points.Insert(bestSegment, projected);
             target = projected;
             return true;
+        }
+
+        // Points of different ways at the same XZ whose heights differ by less than this are made bit-identical.
+        private const float SharedPointHeightToleranceMeters = 0.05f;
+
+        /// <summary>
+        /// CS2 only joins course points that are exactly equal. Height arithmetic can leave a shared point one float step
+        /// apart between ways (e.g. a bridge end at terrain + 10 - 10 vs the neighbour at terrain), and CS2 then built two
+        /// unconnected nodes (the "structure" junction failures on the UW crop: 9.553215 vs 9.553216). As a last step, all
+        /// points of different ways with bit-identical XZ and heights within SharedPointHeightToleranceMeters get one value,
+        /// preferring a non-structural way's point. Larger differences (a bridge over a road) are left alone.
+        /// </summary>
+        private static void UnifySharedPoints(List<OsmWay> ways)
+        {
+            var groups = new Dictionary<(int, int), List<(OsmWay way, int index)>>();
+            foreach (var way in ways)
+            {
+                for (var i = 0; i < way.Points.Count; i++)
+                {
+                    var p = way.Points[i];
+                    var key = (math.asint(p.x), math.asint(p.z));
+                    if (!groups.TryGetValue(key, out var list))
+                        groups[key] = list = new List<(OsmWay, int)>();
+                    list.Add((way, i));
+                }
+            }
+
+            var unified = 0;
+            foreach (var list in groups.Values)
+            {
+                if (list.Count < 2 || list.Select(e => e.way).Distinct().Count() < 2)
+                    continue;
+                var reference = list.OrderBy(e => e.way.UsesStructuralElevation ? 1 : 0).First();
+                var target = reference.way.Points[reference.index];
+                foreach (var (way, index) in list)
+                {
+                    var p = way.Points[index];
+                    if (p.Equals(target) || math.abs(p.y - target.y) > SharedPointHeightToleranceMeters)
+                        continue;
+                    way.Points[index] = target;
+                    unified++;
+                }
+            }
+            if (unified > 0)
+                Mod.log.Info($"Unified {unified} shared points that differed only by float rounding (CS2 joins exact matches only).");
         }
 
         private static void HarmonizeGroupElevations(List<OsmWay> ways)
