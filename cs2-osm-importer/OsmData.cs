@@ -114,6 +114,12 @@ namespace cs2_osm_importer
         public string Footway { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
         public bool IsRoundabout { get; set; }
+
+        // Small roundabout built as a CS2 roundabout object on a single junction node instead of as a ring road.
+        // The ring itself is not queued; connecting ways are extended to RoundaboutCenter (see OsmParser.ConvertRoundabouts).
+        public bool IsNodeRoundabout { get; set; }
+        public float3 RoundaboutCenter { get; set; }
+        public float RoundaboutRadius { get; set; }
         public int Lanes { get; set; }
         public int LanesForward { get; set; }
         public int LanesBackward { get; set; }

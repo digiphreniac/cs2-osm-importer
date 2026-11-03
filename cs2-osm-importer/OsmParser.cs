@@ -159,6 +159,7 @@ namespace cs2_osm_importer
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
             HarmonizeGroupElevations(finalWays);
+            ConvertRoundabouts(finalWays, sampleHeight);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
@@ -500,7 +501,8 @@ namespace cs2_osm_importer
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
-            way.IsRoundabout = isRoundabout || IsClosedLoopWay(way.NodeIds);
+            // Only junction=roundabout/circular. A closed loop street (around a block, a cul-de-sac loop) is an ordinary road.
+            way.IsRoundabout = isRoundabout;
             way.OneWayDirection = oneWayDirection;
             way.IsOneWay = oneWayDirection != 0 || way.IsRoundabout;
             if (way.IsRoundabout && way.OneWayDirection == 0)
@@ -1870,6 +1872,122 @@ namespace cs2_osm_importer
             return $"{restriction.ViaNodeId}:{restriction.ForbidLeftTurn}:{restriction.ForbidRightTurn}:{restriction.ForbidStraight}:{restriction.ForbidUTurn}";
         }
 
+        // Largest ring (centreline radius) built as a CS2 roundabout object. CS2's largest roundabout object has a
+        // 30 m island; bigger OSM rings are built as ordinary one-way ring roads.
+        private const float MaxNodeRoundaboutRadiusMeters = 30f;
+        private const float MinNodeRoundaboutRadiusMeters = 3f;
+        // Connector points up to this far beyond the OSM ring radius are dropped too (about half a carriageway).
+        private const float RoundaboutClearanceMeters = 6f;
+
+        /// <summary>
+        /// CS2 does not build roundabouts from ring roads: a roundabout is an object placed on ONE junction node. So for
+        /// each OSM roundabout (junction=roundabout ways forming a closed ring, possibly split over several ways):
+        /// - small ring: mark its ways IsNodeRoundabout (not queued as roads), and extend every way that ends on the ring
+        ///   to the ring centre, so they all meet at one node where the importer then places the roundabout object;
+        /// - large ring or an open (incomplete) ring: build it as an ordinary one-way road (IsRoundabout = false).
+        /// </summary>
+        private static void ConvertRoundabouts(List<OsmWay> ways, System.Func<float3, float> sampleHeight)
+        {
+            var ringWays = ways.Where(w => w.IsRoundabout && w.NodeIds.Count >= 2 && w.Points.Count >= 2).ToList();
+            if (ringWays.Count == 0)
+                return;
+
+            // Group roundabout ways that share endpoints (OSM often splits one roundabout into several ways).
+            var parent = new Dictionary<OsmWay, OsmWay>();
+            foreach (var w in ringWays) parent[w] = w;
+            OsmWay Find(OsmWay x) { while (parent[x] != x) x = parent[x]; return x; }
+            var byEndpoint = new Dictionary<long, OsmWay>();
+            foreach (var w in ringWays)
+            {
+                foreach (var id in new[] { w.NodeIds[0], w.NodeIds[w.NodeIds.Count - 1] })
+                {
+                    if (byEndpoint.TryGetValue(id, out var other))
+                        parent[Find(w)] = Find(other);
+                    else
+                        byEndpoint[id] = w;
+                }
+            }
+
+            var converted = 0;
+            var asRingRoads = 0;
+            var extended = 0;
+            var passThrough = 0;
+            foreach (var group in ringWays.GroupBy(Find).Select(g => g.ToList()))
+            {
+                // Closed ring: every endpoint is used exactly twice within the group.
+                var endpointUse = new Dictionary<long, int>();
+                foreach (var w in group)
+                    foreach (var id in new[] { w.NodeIds[0], w.NodeIds[w.NodeIds.Count - 1] })
+                        endpointUse[id] = endpointUse.TryGetValue(id, out var c) ? c + 1 : 1;
+                var closed = endpointUse.Values.All(c => c % 2 == 0);
+
+                var points = group.SelectMany(w => w.Points).ToList();
+                var center = float3.zero;
+                foreach (var p in points) center += p;
+                center /= points.Count;
+                var radius = points.Average(p => math.distance(p.xz, center.xz));
+
+                if (!closed || radius > MaxNodeRoundaboutRadiusMeters || radius < MinNodeRoundaboutRadiusMeters)
+                {
+                    foreach (var w in group)
+                        w.IsRoundabout = false; // build the OSM ring as a normal one-way road
+                    asRingRoads++;
+                    continue;
+                }
+
+                center.y = sampleHeight != null ? sampleHeight(center) : points.Average(p => p.y);
+                var ringNodes = new HashSet<long>(group.SelectMany(w => w.NodeIds));
+                foreach (var w in group)
+                {
+                    w.IsNodeRoundabout = true;
+                    w.RoundaboutCenter = center;
+                    w.RoundaboutRadius = radius;
+                }
+
+                // Every way that ends on the ring now continues to the centre (the exact same float3, so CS2 joins them).
+                foreach (var w in ways)
+                {
+                    if (w.IsRoundabout || w.NodeIds.Count < 2 || w.Points.Count < 1)
+                        continue;
+                    // Points inside the ring (the OSM ring node itself and anything closer to the centre) would sit
+                    // inside CS2's roundabout and leave stray nodes there, so they are replaced by the centre.
+                    var clearRadius = radius + RoundaboutClearanceMeters;
+                    var touches = false;
+                    if (ringNodes.Contains(w.NodeIds[0]))
+                    {
+                        while (w.Points.Count > 1 && math.distance(w.Points[0].xz, center.xz) <= clearRadius)
+                        {
+                            w.Points.RemoveAt(0);
+                            if (w.TerrainHeights.Count > 0) w.TerrainHeights.RemoveAt(0);
+                        }
+                        w.Points.Insert(0, center);
+                        if (w.TerrainHeights.Count > 0) w.TerrainHeights.Insert(0, center.y);
+                        touches = true;
+                    }
+                    if (ringNodes.Contains(w.NodeIds[w.NodeIds.Count - 1]))
+                    {
+                        while (w.Points.Count > 1 && math.distance(w.Points[w.Points.Count - 1].xz, center.xz) <= clearRadius)
+                        {
+                            w.Points.RemoveAt(w.Points.Count - 1);
+                            if (w.TerrainHeights.Count > 0) w.TerrainHeights.RemoveAt(w.TerrainHeights.Count - 1);
+                        }
+                        w.Points.Add(center);
+                        if (w.TerrainHeights.Count > 0) w.TerrainHeights.Add(center.y);
+                        touches = true;
+                    }
+                    if (touches)
+                        extended++;
+                    else if (w.NodeIds.Skip(1).Take(w.NodeIds.Count - 2).Any(ringNodes.Contains))
+                        passThrough++;
+                }
+                converted++;
+            }
+
+            Mod.log.Info($"Roundabouts: {converted} built as CS2 roundabout objects ({extended} connecting ways extended to the centre), " +
+                         $"{asRingRoads} built as ring roads (open, or radius outside {MinNodeRoundaboutRadiusMeters}-{MaxNodeRoundaboutRadiusMeters} m)." +
+                         (passThrough > 0 ? $" {passThrough} ways pass through a ring node without ending there; left unchanged." : string.Empty));
+        }
+
         private static void HarmonizeGroupElevations(List<OsmWay> ways)
         {
             if (ways.Count < 2)
@@ -1978,6 +2096,10 @@ namespace cs2_osm_importer
                 return false;
 
             if (a.UsesStructuralElevation != b.UsesStructuralElevation)
+                return false;
+
+            // A roundabout ring must stay separate from the roads that join it (ConvertRoundabouts needs both).
+            if (a.IsRoundabout || b.IsRoundabout)
                 return false;
 
             if (!ApproximatelyEqual(a.BaseElevationOffsetMeters, b.BaseElevationOffsetMeters))

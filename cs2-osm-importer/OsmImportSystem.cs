@@ -158,6 +158,11 @@ namespace cs2_osm_importer
         private List<string> _generationTypeOrder = new List<string>();
         private List<OsmWay> _roundaboutWays = new List<OsmWay>();
         private List<OsmWay> _roundaboutConnectorWays = new List<OsmWay>();
+        private List<OsmWay> _nodeRoundabouts = new List<OsmWay>();
+        private bool _nodeRoundaboutsPlaced;
+        private bool _nodeRoundaboutsRefreshed;
+        private readonly List<Entity> _nodeRoundaboutNodes = new List<Entity>();
+        private Dictionary<string, Entity> _roundaboutPrefabs;
         private HashSet<long> _roundaboutConnectorWayIds = new HashSet<long>();
         private Dictionary<Entity, OsmWay> _generatedEdgeWays = new Dictionary<Entity, OsmWay>();
         private Dictionary<string, int> _typeWayCounts = new Dictionary<string, int>();
@@ -310,6 +315,7 @@ namespace cs2_osm_importer
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
             _pendingDeleteEntities = _generatedEdgeEntities.Where(entity => entity != Entity.Null).ToList();
+            _pendingDeleteEntities.AddRange(FindRoundaboutObjectsOn(_pendingDeleteEntities));
             _pendingDeleteIndex = 0;
             _deletedEdgeCount = 0;
             _deleteCompletionPending = false;
@@ -427,21 +433,22 @@ namespace cs2_osm_importer
                 _generatedEdgeEntities.Clear();
                 _generatedEdgeWays.Clear();
                 _queuedSegmentInfos.Clear();
-                _roundaboutWays = _document?.Ways?.Where(way => way.IsRoundabout).ToList() ?? new List<OsmWay>();
-                Mod.log.Info($"Detected {_roundaboutWays.Count} roundabout ways in the current import document.");
-                var roundaboutNodeIds = new HashSet<long>();
-                foreach (var roundaboutWay in _roundaboutWays)
-                {
-                    foreach (var nodeId in roundaboutWay.NodeIds)
-                        roundaboutNodeIds.Add(nodeId);
-                }
-
-                _roundaboutConnectorWays = _document?.Ways?
-                    .Where(way => way != null && !way.IsRoundabout && ShouldGenerateWay(way) && way.NodeIds.Any(roundaboutNodeIds.Contains))
-                    .OrderBy(way => way.Id)
+                // Roundabouts: small OSM rings are not queued as roads. OsmParser.ConvertRoundabouts extended the ways
+                // that join them to the ring centre, so those are ordinary roads queued with everything else (one frame),
+                // and PlaceNodeRoundabouts puts a CS2 roundabout object on the centre node once the roads exist.
+                // (The former diameter course with a Roundabout component was ignored by CS2 and left a stray road.)
+                _roundaboutWays = new List<OsmWay>();
+                _roundaboutConnectorWays = new List<OsmWay>();
+                _roundaboutConnectorWayIds = new HashSet<long>();
+                _nodeRoundabouts = _document?.Ways?
+                    .Where(way => way.IsNodeRoundabout)
+                    .GroupBy(way => (way.RoundaboutCenter.x, way.RoundaboutCenter.z))
+                    .Select(g => g.First())
                     .ToList() ?? new List<OsmWay>();
-                _roundaboutConnectorWayIds = _roundaboutConnectorWays.Select(way => way.Id).ToHashSet();
-                Mod.log.Info($"Detected {_roundaboutConnectorWays.Count} roundabout connector ways that will be queued first.");
+                _nodeRoundaboutsPlaced = false;
+                _nodeRoundaboutsRefreshed = false;
+                _nodeRoundaboutNodes.Clear();
+                Mod.log.Info($"Detected {_nodeRoundabouts.Count} roundabouts to place as CS2 roundabout objects after the roads apply.");
                 _generationTypeOrder = BuildGenerationTypeOrder();
                 _typeWayCounts.Clear();
                 _totalGenerationWays = 0;
@@ -742,6 +749,27 @@ namespace cs2_osm_importer
                         _pointIndex = 0;
                         StatusSummary = "Generating remaining roads...";
                         Mod.log.Info($"Roundabouts applied. Queueing remaining roads next. Session {_sessionId}");
+                        return;
+                    }
+
+                    // Roads are applied, so the roundabout centre nodes exist: place the roundabout objects, then wait
+                    // another round of frames for them to apply before naming and completing.
+                    if (!_nodeRoundaboutsPlaced && _nodeRoundabouts.Count > 0)
+                    {
+                        _nodeRoundaboutsPlaced = true;
+                        PlaceNodeRoundabouts();
+                        _applyWaitFrames = 0;
+                        return;
+                    }
+
+                    // The roundabout objects are attached now; CS2 only rebuilds the junction as a ring once the node is
+                    // updated again (verified with the bridge's roundabout_test: without this the island sits in a plain
+                    // crossroads).
+                    if (_nodeRoundaboutsPlaced && !_nodeRoundaboutsRefreshed)
+                    {
+                        _nodeRoundaboutsRefreshed = true;
+                        RefreshRoundaboutNodes();
+                        _applyWaitFrames = 0;
                         return;
                     }
 
@@ -1442,6 +1470,155 @@ namespace cs2_osm_importer
                 return;
 
             Mod.log.Info($"Roundabout diagnostics: center={FormatPoint(center)}, radius={radius:F2}, points={way.Points.Count}.");
+        }
+
+        // CS2 roundabout objects (StaticObjectPrefab + NetObjectData) by island diameter; variant 01 of each size.
+        private static readonly (float islandDiameter, string prefab)[] RoundaboutObjectSizes =
+        {
+            (6f, "SmallRoundabout01"),
+            (14f, "MediumRoundabout01"),
+            (22f, "LargeRoundabout01"),
+            (30f, "XLRoundabout01"),
+        };
+
+        /// <summary>
+        /// Place a CS2 roundabout object on the junction node at each small roundabout's centre, the way the road tool
+        /// does: a CreationDefinition attached to the node plus an ObjectDefinition. The size whose island best fits the
+        /// OSM ring (centreline radius minus about half a carriageway) is used.
+        /// </summary>
+        private void PlaceNodeRoundabouts()
+        {
+            if (_roundaboutPrefabs == null)
+            {
+                _roundaboutPrefabs = new Dictionary<string, Entity>();
+                var wanted = new HashSet<string>(RoundaboutObjectSizes.Select(s => s.prefab));
+                using var prefabs = GetEntityQuery(ComponentType.ReadOnly<PrefabData>()).ToEntityArray(Allocator.Temp);
+                foreach (var p in prefabs)
+                {
+                    var name = _prefabSystem.GetPrefabName(p);
+                    if (wanted.Contains(name))
+                        _roundaboutPrefabs[name] = p;
+                }
+            }
+
+            var nodes = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[] { ComponentType.ReadOnly<Node>() },
+                None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Owner>() }
+            });
+            using var nodeArray = nodes.ToEntityArray(Allocator.Temp);
+
+            var placed = 0;
+            foreach (var way in _nodeRoundabouts)
+            {
+                var center = way.RoundaboutCenter;
+                var node = Entity.Null;
+                var best = 2f;
+                foreach (var n in nodeArray)
+                {
+                    var d = math.distance(EntityManager.GetComponentData<Node>(n).m_Position.xz, center.xz);
+                    if (d < best)
+                    {
+                        best = d;
+                        node = n;
+                    }
+                }
+
+                if (node == Entity.Null)
+                {
+                    Mod.log.Warn($"Roundabout way {way.Id}: no junction node at its centre {FormatPoint(center)} (were its connecting roads generated?). Skipped.");
+                    continue;
+                }
+
+                const float halfCarriageway = 6f;
+                var size = RoundaboutObjectSizes
+                    .OrderBy(s => math.abs(s.islandDiameter * 0.5f + halfCarriageway - way.RoundaboutRadius))
+                    .First();
+                if (!_roundaboutPrefabs.TryGetValue(size.prefab, out var prefab))
+                {
+                    Mod.log.Warn($"Roundabout prefab '{size.prefab}' not found. Skipped roundabout way {way.Id}.");
+                    continue;
+                }
+
+                var entity = EntityManager.CreateEntity();
+                EntityManager.AddComponentData(entity, new CreationDefinition
+                {
+                    m_Prefab = prefab,
+                    m_Attached = node,
+                    m_Flags = CreationFlags.Permanent,
+                    m_RandomSeed = ImportedHash(center, center + new float3(1f, 0f, 0f))
+                });
+                EntityManager.AddComponentData(entity, new ObjectDefinition
+                {
+                    m_Position = EntityManager.GetComponentData<Node>(node).m_Position,
+                    m_Rotation = quaternion.identity,
+                    m_LocalRotation = quaternion.identity,
+                    m_Scale = new float3(1f),
+                    m_Intensity = 1f,
+                    m_Probability = 100,
+                    m_ParentMesh = -1,
+                    m_PrefabSubIndex = -1
+                });
+                EntityManager.AddComponentData(entity, new Updated());
+                placed++;
+                _nodeRoundaboutNodes.Add(node);
+                Mod.log.Info($"Roundabout way {way.Id} (radius {way.RoundaboutRadius:F1} m): placing {size.prefab} on node {node.Index}:{node.Version}.");
+            }
+
+            Mod.log.Info($"Placed {placed} of {_nodeRoundabouts.Count} roundabout objects.");
+        }
+
+        private void RefreshRoundaboutNodes()
+        {
+            foreach (var node in _nodeRoundaboutNodes)
+            {
+                if (!EntityManager.Exists(node))
+                    continue;
+                if (!EntityManager.HasComponent<Updated>(node))
+                    EntityManager.AddComponent<Updated>(node);
+                if (!EntityManager.HasBuffer<ConnectedEdge>(node))
+                    continue;
+                // Copy first: adding components is a structural change that invalidates the buffer.
+                var edges = new List<Entity>();
+                foreach (var connected in EntityManager.GetBuffer<ConnectedEdge>(node, true))
+                    edges.Add(connected.m_Edge);
+                foreach (var edge in edges)
+                {
+                    if (EntityManager.Exists(edge) && !EntityManager.HasComponent<Updated>(edge))
+                        EntityManager.AddComponent<Updated>(edge);
+                }
+            }
+            Mod.log.Info($"Refreshed {_nodeRoundaboutNodes.Count} roundabout junction nodes.");
+        }
+
+        /// <summary>Roundabout objects (placed by PlaceNodeRoundabouts) attached to nodes of the given edges.</summary>
+        private List<Entity> FindRoundaboutObjectsOn(List<Entity> edges)
+        {
+            var nodes = new HashSet<Entity>();
+            foreach (var e in edges)
+            {
+                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Edge>(e))
+                    continue;
+                var edge = EntityManager.GetComponentData<Edge>(e);
+                nodes.Add(edge.m_Start);
+                nodes.Add(edge.m_End);
+            }
+
+            var result = new List<Entity>();
+            var names = new HashSet<string>(RoundaboutObjectSizes.Select(s => s.prefab));
+            using var attached = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[] { ComponentType.ReadOnly<Attached>(), ComponentType.ReadOnly<PrefabRef>() },
+                None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() }
+            }).ToEntityArray(Allocator.Temp);
+            foreach (var o in attached)
+            {
+                if (!nodes.Contains(EntityManager.GetComponentData<Attached>(o).m_Parent))
+                    continue;
+                if (names.Contains(GetPrefabName(EntityManager.GetComponentData<PrefabRef>(o).m_Prefab)))
+                    result.Add(o);
+            }
+            return result;
         }
 
         private static QueuedSegmentInfo BuildRoundaboutQueuedInfo(OsmWay way)
