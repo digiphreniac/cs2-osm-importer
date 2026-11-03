@@ -284,6 +284,7 @@ namespace cs2_osm_importer
             HarmonizeGroupElevations(finalWays);
             ConvertRoundabouts(finalWays, sampleHeight);
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
+            AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
@@ -2366,6 +2367,133 @@ namespace cs2_osm_importer
             bestRoad.Points.Insert(bestSegment, projected);
             target = projected;
             return true;
+        }
+
+        /// <summary>
+        /// Every OSM node shared by several ways must have one height, or CS2 builds separate nodes there. Elevation
+        /// offsets (bridge/tunnel/layer/covered = +-10 m etc.) are per way, and HarmonizeGroupElevations only reconciles
+        /// two way ENDS meeting; a structure joined mid-span, or a structure end meeting another way's middle, kept a
+        /// 1-20 m difference (27 junction failures on the UW crop). Here, for each shared node:
+        /// - target height: a way passing THROUGH the node keeps its height (a footbridge does not sag where a path meets
+        ///   it); if the node is only way ends, the way closest to the ground (smallest |offset|) wins;
+        /// - every other way there is pulled to the target with a smoothstep ramp along the way, at most RampLengthMeters
+        ///   and at most half the distance to that way's neighbouring shared nodes, so ramps never overlap or move another
+        ///   junction. UnifySharedPoints then makes the values bit-identical.
+        /// </summary>
+        private static void AnchorSharedNodeHeights(List<OsmWay> ways, Dictionary<long, float2> sourcePositions)
+        {
+            var uses = new Dictionary<long, List<OsmWay>>();
+            foreach (var w in ways)
+                foreach (var id in w.NodeIds.Distinct())
+                {
+                    if (!uses.TryGetValue(id, out var l)) uses[id] = l = new List<OsmWay>();
+                    l.Add(w);
+                }
+
+            // Anchors per way: (point index, node id) for shared nodes found among its points.
+            var anchors = new Dictionary<OsmWay, List<(int index, long node)>>();
+            var cumulative = new Dictionary<OsmWay, float[]>();
+            foreach (var w in ways)
+            {
+                if (w.Points.Count < 2)
+                    continue;
+                var list = new List<(int, long)>();
+                foreach (var id in w.NodeIds.Distinct())
+                {
+                    if (!uses.TryGetValue(id, out var l) || l.Count < 2 || !sourcePositions.TryGetValue(id, out var xz))
+                        continue;
+                    for (var i = 0; i < w.Points.Count; i++)
+                        if (math.distancesq(w.Points[i].xz, xz) < 1e-6f)
+                        {
+                            list.Add((i, id));
+                            break;
+                        }
+                }
+                if (list.Count == 0)
+                    continue;
+                anchors[w] = list.OrderBy(a => a.Item1).ToList();
+                var c = new float[w.Points.Count];
+                for (var i = 1; i < c.Length; i++)
+                    c[i] = c[i - 1] + math.distance(w.Points[i - 1].xz, w.Points[i].xz);
+                cumulative[w] = c;
+            }
+
+            // Target height per shared node.
+            var target = new Dictionary<long, float>();
+            foreach (var kv in uses)
+            {
+                if (kv.Value.Count < 2)
+                    continue;
+                var candidates = new List<(OsmWay way, float y, bool passes)>();
+                foreach (var w in kv.Value)
+                {
+                    if (!anchors.TryGetValue(w, out var al))
+                        continue;
+                    var a = al.FirstOrDefault(x => x.node == kv.Key);
+                    if (a.node != kv.Key)
+                        continue;
+                    var passes = a.index > 0 && a.index < w.Points.Count - 1;
+                    candidates.Add((w, w.Points[a.index].y, passes));
+                }
+                if (candidates.Count < 2)
+                    continue;
+                var pick = candidates
+                    .OrderBy(x => x.passes ? 0 : 1)
+                    .ThenBy(x => math.abs(x.way.BaseElevationOffsetMeters))
+                    .First();
+                target[kv.Key] = pick.y;
+            }
+
+            // Corrections (computed from the current heights, then applied together).
+            var adjustedWays = 0;
+            var adjustedNodes = 0;
+            foreach (var kv in anchors)
+            {
+                var w = kv.Key;
+                var al = kv.Value;
+                var c = cumulative[w];
+                var deltas = new float[w.Points.Count];
+                var changed = false;
+                for (var k = 0; k < al.Count; k++)
+                {
+                    var (index, node) = al[k];
+                    if (!target.TryGetValue(node, out var t))
+                        continue;
+                    var delta = t - w.Points[index].y;
+                    if (math.abs(delta) < 0.01f)
+                        continue;
+                    var s = c[index];
+                    var leftLimit = k > 0 ? (s - c[al[k - 1].index]) * 0.5f : s;
+                    var rightLimit = k < al.Count - 1 ? (c[al[k + 1].index] - s) * 0.5f : c[c.Length - 1] - s;
+                    var rl = math.min(RampLengthMeters, leftLimit);
+                    var rr = math.min(RampLengthMeters, rightLimit);
+                    for (var i = 0; i < w.Points.Count; i++)
+                    {
+                        var d = c[i] - s;
+                        var r = d < 0f ? rl : rr;
+                        if (i != index && (r <= 0f || math.abs(d) >= r))
+                            continue;
+                        var u = i == index ? 0f : math.abs(d) / r;
+                        deltas[i] += delta * (1f - u * u * (3f - 2f * u));
+                    }
+                    changed = true;
+                    adjustedNodes++;
+                }
+                if (!changed)
+                    continue;
+                for (var i = 0; i < w.Points.Count; i++)
+                {
+                    if (deltas[i] == 0f)
+                        continue;
+                    var p = w.Points[i];
+                    p.y += deltas[i];
+                    w.Points[i] = p;
+                }
+                adjustedWays++;
+            }
+
+            if (adjustedNodes > 0)
+                Mod.log.Info($"Shared-node heights: pulled {adjustedNodes} way/node pairs on {adjustedWays} ways to the junction height (structures joined mid-span or end-to-middle).");
         }
 
         // Points of different ways at the same XZ whose heights differ by less than this are made bit-identical.
