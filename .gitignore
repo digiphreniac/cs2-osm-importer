@@ -14,3 +14,6 @@ cs2-osm-importer/Library/
 cs2-osm-importer/ui/node_modules/
 Mono.Cecil*.dll
 .vscode/settings.json
+
+# Local dev-only agent bridge (separate mod + client scripts)
+/agent-bridge/
