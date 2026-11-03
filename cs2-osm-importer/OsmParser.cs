@@ -15,6 +15,127 @@ namespace cs2_osm_importer
         private const float RampLengthMeters = 60f;
         private const float SidewalkSpatialBucketSizeMeters = 64f;
 
+        // Must match OsmImportSystem.MinSegmentLengthMeters: shorter segments are not queued.
+        private const float MinSegmentLengthMeters = 1f;
+
+        /// <summary>
+        /// Gives road-network nodes closer than minDistance (projected units) one shared position. The importer does not
+        /// queue segments shorter than 1 m, and skipping one left a gap: the way's next segment started a fraction of a
+        /// metre from where its neighbour ended, so CS2 built two unconnected nodes (63 of 99 same-height junction
+        /// failures on the UW campus crop, e.g. a stop-line node 0.57 m from a junction). Merged nodes produce
+        /// zero-length segments instead, which are skipped without leaving a gap.
+        /// Consecutive nodes of one way always merge; nodes of different ways merge only when neither is on a
+        /// bridge/tunnel/covered/layer way, so a structure is never joined to the road under it.
+        /// </summary>
+        private static void MergeCloseRoadNodes(Dictionary<long, GeoNode> nodes, List<XmlElement> wayElements, HashSet<long> roadNodeIds, double minDistance)
+        {
+            var parent = new Dictionary<long, long>();
+            long Find(long x) { while (parent.TryGetValue(x, out var p) && p != x) x = p; return x; }
+            void Union(long a, long b)
+            {
+                if (!parent.ContainsKey(a)) parent[a] = a;
+                if (!parent.ContainsKey(b)) parent[b] = b;
+                var ra = Find(a);
+                var rb = Find(b);
+                if (ra != rb) parent[ra] = rb;
+            }
+            double Dist(GeoNode a, GeoNode b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+
+            var useCount = new Dictionary<long, int>();
+            var structural = new HashSet<long>();
+            foreach (var way in wayElements)
+            {
+                var ids = new List<long>();
+                var nds = way.SelectNodes("nd");
+                if (nds == null)
+                    continue;
+                foreach (XmlElement nd in nds)
+                    ids.Add(ReadLong(nd, "ref"));
+
+                var isStructure = false;
+                var tags = way.SelectNodes("tag");
+                if (tags != null)
+                {
+                    foreach (XmlElement tag in tags)
+                    {
+                        var key = tag.GetAttribute("k");
+                        var value = tag.GetAttribute("v");
+                        if ((key == "bridge" || key == "tunnel" || key == "covered") && !IsFalsey(value) ||
+                            key == "layer" && value != "0" && value.Length > 0)
+                            isStructure = true;
+                    }
+                }
+
+                foreach (var id in ids.Distinct())
+                {
+                    useCount[id] = useCount.TryGetValue(id, out var c) ? c + 1 : 1;
+                    if (isStructure)
+                        structural.Add(id);
+                }
+
+                for (var i = 1; i < ids.Count; i++)
+                {
+                    if (ids[i] != ids[i - 1] && nodes.TryGetValue(ids[i - 1], out var a) && nodes.TryGetValue(ids[i], out var b) && Dist(a, b) < minDistance)
+                        Union(ids[i - 1], ids[i]);
+                }
+            }
+
+            // Nodes of different (non-structural) ways within minDistance: grid search.
+            var cell = Math.Max(minDistance, 1e-6);
+            var grid = new Dictionary<(long, long), List<long>>();
+            foreach (var id in roadNodeIds)
+            {
+                if (structural.Contains(id) || !nodes.TryGetValue(id, out var n))
+                    continue;
+                var key = ((long)Math.Floor(n.X / cell), (long)Math.Floor(n.Y / cell));
+                if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<long>();
+                list.Add(id);
+            }
+            foreach (var kv in grid)
+            {
+                for (var dx = 0; dx <= 1; dx++)
+                    for (var dy = -1; dy <= 1; dy++)
+                    {
+                        if (dx == 0 && dy < 0)
+                            continue;
+                        if (!grid.TryGetValue((kv.Key.Item1 + dx, kv.Key.Item2 + dy), out var other))
+                            continue;
+                        foreach (var a in kv.Value)
+                            foreach (var b in other)
+                                if (a < b || (dx != 0 || dy != 0))
+                                    if (a != b && Dist(nodes[a], nodes[b]) < minDistance)
+                                        Union(a, b);
+                    }
+            }
+
+            // Each group takes the position of its most-used node (the junction), so junctions do not move.
+            var groups = new Dictionary<long, List<long>>();
+            foreach (var id in parent.Keys.ToList())
+            {
+                var root = Find(id);
+                if (!groups.TryGetValue(root, out var g)) groups[root] = g = new List<long>();
+                g.Add(id);
+            }
+            var moved = 0;
+            foreach (var g in groups.Values)
+            {
+                var members = g.Where(nodes.ContainsKey).Distinct().ToList();
+                if (members.Count < 2)
+                    continue;
+                var anchor = members.OrderByDescending(id => useCount.TryGetValue(id, out var c) ? c : 0).ThenBy(id => id).First();
+                foreach (var id in members)
+                {
+                    if (id == anchor)
+                        continue;
+                    nodes[id].X = nodes[anchor].X;
+                    nodes[id].Y = nodes[anchor].Y;
+                    moved++;
+                }
+            }
+            if (moved > 0)
+                Mod.log.Info($"Merged {moved} road nodes into a node closer than {MinSegmentLengthMeters} m (avoids dropped tiny segments leaving gaps).");
+        }
+
         private sealed class GeoNode
         {
             public double Lat;
@@ -130,6 +251,8 @@ namespace cs2_osm_importer
                 document.CenterLat = center.Lat;
                 document.CenterLon = center.Lon;
             }
+
+            MergeCloseRoadNodes(nodes, supportedWays, roadNodeIds, MinSegmentLengthMeters / Math.Max(1e-6f, options.ScaleFactor));
 
             foreach (var nodeId in roadNodeIds)
             {
@@ -558,6 +681,10 @@ namespace cs2_osm_importer
                     : options.ElevationMeters;
 
                 AddNodeFeatureLocations(way, nodeId, node, currentPoint);
+
+                // Merged close nodes (MergeCloseRoadNodes) share a position: keep one point.
+                if (way.Points.Count > 0 && math.distancesq(way.Points[way.Points.Count - 1].xz, currentPoint.xz) < 1e-8f)
+                    continue;
 
                 if (sampleHeight != null && way.Points.Count > 0)
                 {
