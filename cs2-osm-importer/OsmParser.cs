@@ -160,6 +160,7 @@ namespace cs2_osm_importer
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
             HarmonizeGroupElevations(finalWays);
             ConvertRoundabouts(finalWays, sampleHeight);
+            finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
@@ -1986,6 +1987,257 @@ namespace cs2_osm_importer
             Mod.log.Info($"Roundabouts: {converted} built as CS2 roundabout objects ({extended} connecting ways extended to the centre), " +
                          $"{asRingRoads} built as ring roads (open, or radius outside {MinNodeRoundaboutRadiusMeters}-{MaxNodeRoundaboutRadiusMeters} m)." +
                          (passThrough > 0 ? $" {passThrough} ways pass through a ring node without ending there; left unchanged." : string.Empty));
+        }
+
+        // Paths ending on a dropped sidewalk/crossing are extended onto a road within this distance.
+        private const float PathToRoadSnapMeters = 15f;
+        // A road point this close to the snap position is reused instead of inserting a new one.
+        private const float RoadPointReuseMeters = 2f;
+        // Crosswalk features this close to a road junction are dropped: the junction draws its own crosswalks.
+        private const float JunctionCrosswalkRadiusMeters = 12f;
+
+        private static bool IsPedestrianDetailFootway(OsmWay way)
+        {
+            if (way == null || !string.Equals(way.Highway, "footway", StringComparison.OrdinalIgnoreCase))
+                return false;
+            switch ((way.Footway ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "sidewalk":
+                case "crossing":
+                case "traffic_island":
+                case "link":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsVehicleRoad(OsmWay way)
+        {
+            if (way == null || string.IsNullOrWhiteSpace(way.Highway) || way.IsNodeRoundabout)
+                return false;
+            switch (way.Highway.ToLowerInvariant())
+            {
+                case "motorway": case "motorway_link": case "trunk": case "trunk_link":
+                case "primary": case "primary_link": case "secondary": case "secondary_link":
+                case "tertiary": case "tertiary_link": case "unclassified": case "residential":
+                case "living_street": case "service": case "road":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Builds pedestrian details the way CS2 gameplay does instead of copying OSM's drawing literally. CS2 roads
+        /// carry their own sidewalks, junctions draw their own crosswalks, and a crosswalk anywhere else is a node
+        /// upgrade (Upgraded + CompositionFlags Crosswalk, applied by OsmImportSystem.ApplyRoadServiceUpgrades).
+        /// Built literally, OSM's separately mapped sidewalks ran inside the road's own sidewalk (dead-end caps poking
+        /// out), and crossing ways lay on the road surface (slabs) or added a second crosswalk next to a junction.
+        /// - drop footway=sidewalk/crossing/traffic_island/link ways;
+        /// - every crossing way's road node becomes a crosswalk feature on that road (unless near a junction);
+        /// - real paths (campus walkways etc.) that ended on a dropped detail are extended onto the road: to the
+        ///   crossing's road node when they ended on its kerb (so both sides meet one node and CS2 draws the
+        ///   crosswalk), otherwise to the nearest road point within PathToRoadSnapMeters.
+        /// </summary>
+        private static List<OsmWay> ReplaceMappedPedestrianDetails(List<OsmWay> ways, Dictionary<long, float2> sourcePositions)
+        {
+            var details = ways.Where(IsPedestrianDetailFootway).ToList();
+            if (details.Count == 0)
+                return ways;
+            var detailSet = new HashSet<OsmWay>(details);
+            var roads = ways.Where(IsVehicleRoad).ToList();
+
+            var waysByNode = new Dictionary<long, List<OsmWay>>();
+            foreach (var w in ways)
+                foreach (var id in w.NodeIds.Distinct())
+                {
+                    if (!waysByNode.TryGetValue(id, out var list))
+                        waysByNode[id] = list = new List<OsmWay>();
+                    list.Add(w);
+                }
+
+            float3? RoadPointAt(OsmWay road, long nodeId)
+            {
+                if (!sourcePositions.TryGetValue(nodeId, out var xz))
+                    return null;
+                foreach (var p in road.Points)
+                    if (math.distance(p.xz, xz) < 0.01f)
+                        return p; // the exact float3 the road will queue
+                return null;
+            }
+
+            // Crossing ways: their road node becomes a crosswalk; their kerb nodes lead to that road node.
+            var kerbToRoadPoint = new Dictionary<long, float3>();
+            var crosswalksAdded = 0;
+            foreach (var crossing in details.Where(d => string.Equals(d.Footway, "crossing", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var id in crossing.NodeIds)
+                {
+                    if (!waysByNode.TryGetValue(id, out var onNode))
+                        continue;
+                    var road = onNode.FirstOrDefault(IsVehicleRoad);
+                    if (road == null)
+                        continue;
+                    var point = RoadPointAt(road, id);
+                    if (point == null)
+                        continue;
+                    if (!road.Crosswalks.Any(c => c.NodeId == id))
+                    {
+                        road.Crosswalks.Add(new OsmRoadNodeFeature { NodeId = id, Position = point.Value });
+                        crosswalksAdded++;
+                    }
+                    foreach (var kerb in crossing.NodeIds)
+                        if (kerb != id && !kerbToRoadPoint.ContainsKey(kerb))
+                            kerbToRoadPoint[kerb] = point.Value;
+                }
+            }
+
+            // Junction crosswalks are drawn by the junction itself.
+            var junctionPoints = new List<float2>();
+            foreach (var kv in waysByNode)
+                if (kv.Value.Count(IsVehicleRoad) >= 2 && sourcePositions.TryGetValue(kv.Key, out var jp))
+                    junctionPoints.Add(jp);
+            var junctionGrid = new Dictionary<(int, int), List<float2>>();
+            foreach (var jp in junctionPoints)
+            {
+                var key = ((int)math.floor(jp.x / 16f), (int)math.floor(jp.y / 16f));
+                if (!junctionGrid.TryGetValue(key, out var cell)) junctionGrid[key] = cell = new List<float2>();
+                cell.Add(jp);
+            }
+            bool NearJunction(float2 p)
+            {
+                var cx = (int)math.floor(p.x / 16f);
+                var cz = (int)math.floor(p.y / 16f);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                        if (junctionGrid.TryGetValue((cx + dx, cz + dz), out var cell) &&
+                            cell.Any(q => math.distance(q, p) <= JunctionCrosswalkRadiusMeters && math.distance(q, p) > 0.01f))
+                            return true;
+                return false;
+            }
+            var crosswalksDroppedNearJunction = 0;
+            foreach (var road in roads)
+                crosswalksDroppedNearJunction += road.Crosswalks.RemoveAll(c => NearJunction(c.Position.xz));
+
+            // Real paths that ended on a dropped detail: extend them onto the road.
+            var snappedToCrossing = 0;
+            var snappedToRoad = 0;
+            var leftUnsnapped = 0;
+            foreach (var path in ways)
+            {
+                if (detailSet.Contains(path) || IsVehicleRoad(path) || path.IsRoundabout || path.NodeIds.Count < 2 || path.Points.Count < 2)
+                    continue;
+                if (!IsPathLike(path))
+                    continue;
+                for (var end = 0; end < 2; end++)
+                {
+                    var nodeId = end == 0 ? path.NodeIds[0] : path.NodeIds[path.NodeIds.Count - 1];
+                    if (!waysByNode.TryGetValue(nodeId, out var onNode))
+                        continue;
+                    if (onNode.Any(IsVehicleRoad) || !onNode.Any(detailSet.Contains))
+                        continue; // already on a road, or not ending on a dropped detail
+                    var endPoint = end == 0 ? path.Points[0] : path.Points[path.Points.Count - 1];
+
+                    float3 target;
+                    if (kerbToRoadPoint.TryGetValue(nodeId, out var crossingPoint))
+                    {
+                        target = crossingPoint;
+                        snappedToCrossing++;
+                    }
+                    else if (TrySnapToRoad(endPoint, roads, out target))
+                    {
+                        snappedToRoad++;
+                    }
+                    else
+                    {
+                        leftUnsnapped++;
+                        continue;
+                    }
+
+                    if (math.distance(target.xz, endPoint.xz) < 0.01f)
+                        continue;
+                    if (end == 0)
+                    {
+                        path.Points.Insert(0, target);
+                        if (path.TerrainHeights.Count > 0) path.TerrainHeights.Insert(0, target.y);
+                    }
+                    else
+                    {
+                        path.Points.Add(target);
+                        if (path.TerrainHeights.Count > 0) path.TerrainHeights.Add(target.y);
+                    }
+                }
+            }
+
+            Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
+                         $"{crosswalksAdded} crosswalk upgrades added from crossing ways, {crosswalksDroppedNearJunction} dropped near junctions; " +
+                         $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
+            return ways.Where(w => !detailSet.Contains(w)).ToList();
+        }
+
+        private static bool IsPathLike(OsmWay way)
+        {
+            switch ((way.Highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "footway": case "path": case "pedestrian": case "cycleway": case "steps": case "bridleway":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Nearest point on any road within PathToRoadSnapMeters. An existing road point within RoadPointReuseMeters is
+        /// reused; otherwise the projected point is inserted into that road so CS2 has a node to join the path to.
+        /// </summary>
+        private static bool TrySnapToRoad(float3 p, List<OsmWay> roads, out float3 target)
+        {
+            target = default;
+            OsmWay bestRoad = null;
+            var bestSegment = -1;
+            var bestT = 0f;
+            var bestDistance = PathToRoadSnapMeters;
+            foreach (var road in roads)
+            {
+                var pts = road.Points;
+                for (var i = 1; i < pts.Count; i++)
+                {
+                    var a = pts[i - 1].xz;
+                    var b = pts[i].xz;
+                    if (math.min(a.x, b.x) - bestDistance > p.x || math.max(a.x, b.x) + bestDistance < p.x ||
+                        math.min(a.y, b.y) - bestDistance > p.z || math.max(a.y, b.y) + bestDistance < p.z)
+                        continue;
+                    var ab = b - a;
+                    var len2 = math.lengthsq(ab);
+                    var t = len2 > 1e-6f ? math.saturate(math.dot(p.xz - a, ab) / len2) : 0f;
+                    var d = math.distance(p.xz, a + ab * t);
+                    if (d < bestDistance)
+                    {
+                        bestDistance = d;
+                        bestRoad = road;
+                        bestSegment = i;
+                        bestT = t;
+                    }
+                }
+            }
+
+            if (bestRoad == null)
+                return false;
+
+            var p0 = bestRoad.Points[bestSegment - 1];
+            var p1 = bestRoad.Points[bestSegment];
+            var projected = math.lerp(p0, p1, bestT);
+            if (math.distance(projected.xz, p0.xz) <= RoadPointReuseMeters) { target = p0; return true; }
+            if (math.distance(projected.xz, p1.xz) <= RoadPointReuseMeters) { target = p1; return true; }
+
+            // TerrainHeights runs parallel to Points; keep it aligned.
+            if (bestRoad.TerrainHeights.Count == bestRoad.Points.Count)
+                bestRoad.TerrainHeights.Insert(bestSegment,
+                    math.lerp(bestRoad.TerrainHeights[bestSegment - 1], bestRoad.TerrainHeights[bestSegment], bestT));
+            bestRoad.Points.Insert(bestSegment, projected);
+            target = projected;
+            return true;
         }
 
         private static void HarmonizeGroupElevations(List<OsmWay> ways)
