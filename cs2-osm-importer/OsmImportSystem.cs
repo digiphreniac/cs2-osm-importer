@@ -417,7 +417,7 @@ namespace cs2_osm_importer
                 _lastPendingDefinitions = -1;
                 _lastWaitLogFrame = 0;
                 _baselineEdgeCount = CountAllNetEdges();
-                using (var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp))
+                using (var edgeArray = GetCurrentNetEdgeArray(Allocator.Temp))
                 {
                     _baselineSegments = edgeArray.ToHashSet();
                 }
@@ -1507,7 +1507,7 @@ namespace cs2_osm_importer
             if (_roadNamesApplied || _nameSystem == null || _queuedSegmentInfos.Count == 0)
                 return;
 
-            using var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
+            using var edgeArray = GetCurrentNetEdgeArray(Allocator.Temp);
             if (edgeArray.Length == 0)
                 return;
 
@@ -2111,7 +2111,7 @@ namespace cs2_osm_importer
             if (!_roadNamesApplied || _nameSystem == null)
                 return L("OsmImporter.Status.ValidationNotApplied", "Validation: names not yet applied.");
 
-            var edgeArray = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
+            var edgeArray = GetCurrentNetEdgeArray(Allocator.Temp);
             var newEdges = new List<Entity>();
             foreach (var entity in edgeArray)
             {
@@ -3900,9 +3900,40 @@ namespace cs2_osm_importer
 
         private int CountAllNetEdges()
         {
-            using var entities = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
+            using var entities = GetCurrentNetEdgeArray(Allocator.Temp);
 
             return entities.Length;
+        }
+
+        /// <summary>
+        /// Every network edge the importer can generate: roads and tracks (GetCurrentNetEdges) plus pedestrian
+        /// pathways. Pathway edges carry no type-specific component like Road or TrainTrack, so they are found
+        /// through their prefab's PathwayData. Without them, footways were missing from the baseline/new-edge
+        /// tracking, so Delete Generated left them behind and the geometry report showed them as unbuilt.
+        /// </summary>
+        private NativeArray<Entity> GetCurrentNetEdgeArray(Allocator allocator)
+        {
+            using var roadEdges = GetCurrentNetEdges().ToEntityArray(Allocator.Temp);
+            using var otherEdges = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<PrefabRef>() },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Road>(), ComponentType.ReadOnly<TrainTrack>(),
+                    ComponentType.ReadOnly<SubwayTrack>(), ComponentType.ReadOnly<TramTrack>()
+                },
+            }).ToEntityArray(Allocator.Temp);
+
+            var result = new List<Entity>(roadEdges.Length + otherEdges.Length);
+            result.AddRange(roadEdges);
+            foreach (var entity in otherEdges)
+            {
+                var prefab = EntityManager.GetComponentData<PrefabRef>(entity).m_Prefab;
+                if (EntityManager.HasComponent<PathwayData>(prefab))
+                    result.Add(entity);
+            }
+
+            return new NativeArray<Entity>(result.ToArray(), allocator);
         }
 
         private EntityQuery GetCurrentNetEdges()
