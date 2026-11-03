@@ -1755,6 +1755,14 @@ namespace cs2_osm_importer
 
             public Action onAvailableFiltersChanged { get; set; }
 
+            // Exclude filters were added to FilterMenu.IAdapter in a game update; this menu only supports include.
+            public List<string> excludedFilters { get; } = new List<string>();
+
+            public bool supportsExclude => false;
+
+            public void SetFilterState(string filter, FilterMenu.FilterState state) =>
+                ToggleFilter(filter, state == FilterMenu.FilterState.Include);
+
             public void SyncAvailableRoadTypes(IEnumerable<string> roadTypes)
             {
                 availableFilters.Clear();
@@ -1839,6 +1847,14 @@ namespace cs2_osm_importer
             public List<string> activeFilters { get; } = new List<string>();
 
             public Action onAvailableFiltersChanged { get; set; }
+
+            // Exclude filters were added to FilterMenu.IAdapter in a game update; this menu only supports include.
+            public List<string> excludedFilters { get; } = new List<string>();
+
+            public bool supportsExclude => false;
+
+            public void SetFilterState(string filter, FilterMenu.FilterState state) =>
+                ToggleFilter(filter, state == FilterMenu.FilterState.Include);
 
             public void SyncAvailableRoadTypes(IEnumerable<string> upgradeKeys)
             {
