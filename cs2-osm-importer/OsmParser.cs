@@ -12,7 +12,6 @@ namespace cs2_osm_importer
     {
         private const double EarthRadiusMeters = 6378137d;
         private const float MaxTerrainSegmentLengthMeters = 15f;
-        private const float DefaultInclinePercent = 4f;
         private const float RampLengthMeters = 60f;
         private const float SidewalkSpatialBucketSizeMeters = 64f;
 
@@ -2625,8 +2624,11 @@ namespace cs2_osm_importer
                 return;
             }
 
-            var normalizedInclinePercent = inclinePercent > 0f ? inclinePercent : DefaultInclinePercent;
-            var inclineRiseMeters = totalLength * (normalizedInclinePercent / 100f);
+            // incline=* is not applied as an extra height. It describes the slope the way already has: on the ground the
+            // terrain provides it, and structural ways interpolate between their end heights. Adding it on top (the
+            // former inclineDirection * length * percent * t) left the far end of every inclined way metres off the
+            // terrain, so CS2 built two unconnected nodes wherever it met another way (131 of 163 height-mismatch
+            // junction failures on the UW campus crop). OsmWay.InclineDirection/InclinePercent remain (way merging compares them).
             var startTerrain = terrainHeights[0];
             var endTerrain = terrainHeights[sampleCount - 1];
 
@@ -2637,11 +2639,8 @@ namespace cs2_osm_importer
                 var terrainBase = structuralElevation
                     ? math.lerp(startTerrain, endTerrain, t)
                     : terrainHeights[i];
-                var inclineOffsetMeters = inclineDirection == 0
-                    ? 0f
-                    : inclineDirection * inclineRiseMeters * t;
 
-                point.y = terrainBase + baseElevationOffsetMeters + inclineOffsetMeters;
+                point.y = terrainBase + baseElevationOffsetMeters;
                 points[i] = point;
             }
         }
