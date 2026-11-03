@@ -33,6 +33,7 @@ namespace cs2_osm_importer
             "secondary_link",
             "tertiary_link",
             "footway",
+            "steps",
             "bridleway",
             "monorail",
             "rail",
@@ -63,6 +64,7 @@ namespace cs2_osm_importer
                 { "secondary_link", new RoadTypeMetadata("OsmImporter.RoadType.SecondaryLink.Name", "Secondary link", "OsmImporter.RoadType.SecondaryLink.Description", "Connector between secondary roads and local streets.", "Media/Game/Icons/SmallRoad.svg") },
                 { "tertiary_link", new RoadTypeMetadata("OsmImporter.RoadType.TertiaryLink.Name", "Tertiary link", "OsmImporter.RoadType.TertiaryLink.Description", "Connector between tertiary roads and nearby local access.", "Media/Game/Icons/SmallRoadOneway1lane.svg") },
                 { "footway", new RoadTypeMetadata("OsmImporter.RoadType.Footway.Name", "Footway", "OsmImporter.RoadType.Footway.Description", "Path designed for pedestrians, often separate from the road network.", "Media/Game/Icons/Pathways.svg") },
+                { "steps", new RoadTypeMetadata("OsmImporter.RoadType.Steps.Name", "Steps", "OsmImporter.RoadType.Steps.Description", "Outdoor stairs for pedestrians, built as a pedestrian path (CS2 has no stairs).", "Media/Game/Icons/Pathways.svg") },
                 { "bridleway", new RoadTypeMetadata("OsmImporter.RoadType.Bridleway.Name", "Bridleway", "OsmImporter.RoadType.Bridleway.Description", "Path intended for horse riding, also open to pedestrians.", "Media/Game/Icons/Pathways.svg") },
                 { "monorail", new RoadTypeMetadata("OsmImporter.RoadType.Monorail.Name", "Monorail", "OsmImporter.RoadType.Monorail.Description", "Single-rail railway system for passenger transport.", "Media/Game/Icons/Train.svg") },
                 { "rail", new RoadTypeMetadata("OsmImporter.RoadType.Rail.Name", "Rail", "OsmImporter.RoadType.Rail.Description", "Standard railway track for passenger and freight trains.", "Media/Game/Icons/TwoWayTrainTrack.svg") },
@@ -745,6 +747,7 @@ namespace cs2_osm_importer
                 h = h * 31 + (s.DefaultImportSecondaryLink ? 1 : 0);
                 h = h * 31 + (s.DefaultImportTertiaryLink ? 1 : 0);
                 h = h * 31 + (s.DefaultImportFootway ? 1 : 0);
+                h = h * 31 + (s.DefaultImportSteps ? 1 : 0);
                 h = h * 31 + (s.DefaultImportBridleway ? 1 : 0);
                 h = h * 31 + (s.DefaultImportMonorail ? 1 : 0);
                 h = h * 31 + (s.DefaultImportRail ? 1 : 0);
@@ -834,6 +837,7 @@ namespace cs2_osm_importer
                 case "secondary_link": return settings.DefaultImportSecondaryLink;
                 case "tertiary_link": return settings.DefaultImportTertiaryLink;
                 case "footway": return settings.DefaultImportFootway;
+                case "steps": return settings.DefaultImportSteps;
                 case "bridleway": return settings.DefaultImportBridleway;
                 case "monorail": return settings.DefaultImportMonorail;
                 case "rail": return settings.DefaultImportRail;

@@ -99,6 +99,7 @@ namespace cs2_osm_importer
             { "secondary_link", new List<PrefabSelectionRule>() },
             { "tertiary_link", new List<PrefabSelectionRule>() },
             { "footway", new List<PrefabSelectionRule>() },
+            { "steps", new List<PrefabSelectionRule>() },
             { "bridleway", new List<PrefabSelectionRule>() },
             { "monorail", new List<PrefabSelectionRule>() },
             { "rail", new List<PrefabSelectionRule>() },
@@ -3663,6 +3664,7 @@ namespace cs2_osm_importer
                 case "service":
                     return new[] { "Service", "Street", "Road" };
                 case "footway":
+                case "steps":
                 case "pedestrian":
                     return new[] { "Pedestrian Path", "Pedestrian Walkway", "Walkway", "Footpath", "Path" };
                 case "bridleway":
@@ -3694,6 +3696,7 @@ namespace cs2_osm_importer
                 case "bridleway":
                     return new[] { "Trail", "Bridleway", "Path", "Walkway", "Pedestrian Path" };
                 case "footway":
+                case "steps":
                 case "pedestrian":
                     return new[]
                     {
@@ -3750,14 +3753,14 @@ namespace cs2_osm_importer
             if (requiresSidewalk && lower.Contains("alley"))
                 return false;
 
-            if (!(highwayType is "footway" or "bridleway" or "cycleway" or "pedestrian") &&
+            if (!(highwayType is "footway" or "steps" or "bridleway" or "cycleway" or "pedestrian") &&
                 (lower.Contains("pedestrianstreet") || lower.Contains("pedestrian street")))
             {
                 return false;
             }
 
             // Path prefabs are suitable for pedestrian/cycle types
-            if (!(highwayType is "footway" or "bridleway" or "cycleway" or "pedestrian") && lower.Contains("path"))
+            if (!(highwayType is "footway" or "steps" or "bridleway" or "cycleway" or "pedestrian") && lower.Contains("path"))
                 return false;
 
             if (highwayType.Equals("service", StringComparison.OrdinalIgnoreCase) &&
@@ -3829,7 +3832,7 @@ namespace cs2_osm_importer
             {
                 "cycleway" => lower.Contains("cycle") || lower.Contains("bike") || lower.Contains("bicycle") || lower.Contains("path") || lower.Contains("walkway"),
                 "bridleway" => lower.Contains("trail") || lower.Contains("path") || lower.Contains("walkway") || lower.Contains("pedestrian"),
-                "footway" or "pedestrian" => lower.Contains("pedestrian") || lower.Contains("walkway") || lower.Contains("footpath") || lower.Contains("path"),
+                "footway" or "steps" or "pedestrian" => lower.Contains("pedestrian") || lower.Contains("walkway") || lower.Contains("footpath") || lower.Contains("path"),
                 _ => lower.Contains("path") || lower.Contains("walkway") || lower.Contains("trail"),
             };
         }
@@ -3842,6 +3845,7 @@ namespace cs2_osm_importer
             switch ((highwayType ?? string.Empty).ToLowerInvariant())
             {
                 case "footway":
+                case "steps":
                 case "pedestrian":
                 case "bridleway":
                 case "cycleway":
@@ -3956,6 +3960,7 @@ namespace cs2_osm_importer
                 case "service":
                     return 1;
                 case "footway":
+                case "steps":
                 case "bridleway":
                 case "track":
                 case "cycleway":

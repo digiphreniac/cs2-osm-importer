@@ -69,6 +69,8 @@
   "OsmImporter.RoadType.Cycleway.Name": "Cycleway",
   "OsmImporter.RoadType.Footway.Description": "Path designed for pedestrians, often separate from the road network.",
   "OsmImporter.RoadType.Footway.Name": "Footway",
+  "OsmImporter.RoadType.Steps.Description": "Outdoor stairs for pedestrians, built as a pedestrian path (CS2 has no stairs).",
+  "OsmImporter.RoadType.Steps.Name": "Steps",
   "OsmImporter.RoadType.LightRail.Description": "Urban rail system that combines tram-like flexibility with higher capacity.",
   "OsmImporter.RoadType.LightRail.Name": "Light rail",
   "OsmImporter.RoadType.LivingStreet.Description": "Low-speed shared street where pedestrians have priority.",

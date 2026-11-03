@@ -1020,6 +1020,7 @@ namespace cs2_osm_importer
                 case "cycleway":
                 case "bridleway":
                 case "footway":
+                case "steps":
                 case "pedestrian":
                     return false;
                 default:
@@ -3097,6 +3098,7 @@ namespace cs2_osm_importer
                 case "secondary_link":
                 case "tertiary_link":
                 case "footway":
+                case "steps":
                 case "bridleway":
                 case "monorail":
                 case "rail":

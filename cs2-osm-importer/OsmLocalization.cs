@@ -79,6 +79,8 @@ namespace cs2_osm_importer
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportTertiaryLink]", "Default state for importing tertiary links when loading OSM data." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportFootway]", "Import: footway" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportFootway]", "Default state for importing footways when loading OSM data." },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportSteps]", "Import: steps" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportSteps]", "Default state for importing steps (outdoor stairs) when loading OSM data." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportBridleway]", "Import: bridleway" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportBridleway]", "Default state for importing bridleways when loading OSM data." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportMonorail]", "Import: monorail" },
