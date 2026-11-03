@@ -24,6 +24,15 @@ namespace cs2_osm_importer
     public partial class OsmImportSystem : GameSystemBase
     {
         private const int MaxSegmentsPerFrame = 128;
+
+        // Road definitions are queued in ONE frame per phase by default. CS2 applies each frame's definitions as a
+        // separate set, and when a set is applied it merges any new course point lying within roughly 13-22 m of a
+        // node built by an earlier set into that node (moving the node to the average position). With ~13 m terrain
+        // segments that broke the chain at every 128-segment frame boundary and next to earlier roads: dangling stubs,
+        // ovals with crosswalks, roads attached to the wrong node. Measured on Keddie_CA (empty network): 667 dead
+        // ends / 700 moved nodes at 128 per frame vs 2 / 32 in one frame, and generation 53 s -> 9 s.
+        private int SegmentsPerFrameLimit =>
+            _activeGenerateOptions != null && _activeGenerateOptions.SegmentsPerFrame > 0 ? _activeGenerateOptions.SegmentsPerFrame : int.MaxValue;
         private const int MaxApplyWaitFrames = 3600;
         private const float MinSegmentLengthMeters = 1f;
         private const int PillarWaitFrameThreshold = 60;
@@ -522,7 +531,7 @@ namespace cs2_osm_importer
                             }
                             segmentsThisFrame++;
 
-                            if (segmentsThisFrame >= MaxSegmentsPerFrame)
+                            if (segmentsThisFrame >= SegmentsPerFrameLimit)
                                 break;
                         }
 
@@ -642,7 +651,7 @@ namespace cs2_osm_importer
                         }
 
                         segmentsThisFrame++;
-                        if (segmentsThisFrame >= MaxSegmentsPerFrame)
+                        if (segmentsThisFrame >= SegmentsPerFrameLimit)
                             break;
                     }
 
@@ -841,7 +850,7 @@ namespace cs2_osm_importer
 
                     _roundaboutWayIndex++;
                     _pointIndex = 0;
-                    if (segmentsThisFrame >= MaxSegmentsPerFrame)
+                    if (segmentsThisFrame >= SegmentsPerFrameLimit)
                         break;
                 }
 
