@@ -103,6 +103,31 @@ namespace cs2_osm_importer
         // Projected XZ position (meters, scale applied) of every road node, before interpolation,
         // simplification or way merging. Used as ground truth by the geometry report.
         public Dictionary<long, float2> SourceNodePositions { get; } = new Dictionary<long, float2>();
+
+        // amenity=parking areas (closed ways and multipolygon outer rings), projected like the roads.
+        public List<OsmParkingArea> ParkingAreas { get; } = new List<OsmParkingArea>();
+    }
+
+    internal enum OsmParkingKind
+    {
+        Surface = 0,
+        MultiStorey = 1,
+        Underground = 2,
+        Rooftop = 3,
+        StreetSide = 4,
+        Other = 5,
+    }
+
+    internal sealed class OsmParkingArea
+    {
+        public long Id { get; set; }
+        public bool FromRelation { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public OsmParkingKind Kind { get; set; }
+        public int Capacity { get; set; }
+
+        // Outline in world XZ (metres, scale applied), counter-clockwise, without a repeated closing point.
+        public List<float2> Ring { get; } = new List<float2>();
     }
 
     internal sealed class OsmWay
@@ -114,6 +139,10 @@ namespace cs2_osm_importer
         public string Footway { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
         public bool IsRoundabout { get; set; }
+
+        // service=parking_aisle lying inside an imported surface parking lot (replaced by the lot's own aisles).
+        public bool IsParkingAisle { get; set; }
+        public bool IsInsideParkingLot { get; set; }
 
         // Small roundabout built as a CS2 roundabout object on a single junction node instead of as a ring road.
         // The ring itself is not queued; connecting ways are extended to RoundaboutCenter (see OsmParser.ConvertRoundabouts).

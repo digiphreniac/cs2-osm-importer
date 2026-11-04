@@ -8,7 +8,7 @@ using Unity.Mathematics;
 
 namespace cs2_osm_importer
 {
-    internal static class OsmParser
+    internal static partial class OsmParser
     {
         private const double EarthRadiusMeters = 6378137d;
         private const float MaxTerrainSegmentLengthMeters = 15f;
@@ -286,6 +286,8 @@ namespace cs2_osm_importer
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
+            ReadParkingAreas(xml, wayElements, nodes, roadNodeIds, document, options);
+            MarkAislesInsideParkingLots(finalWays, document.ParkingAreas);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
@@ -502,6 +504,8 @@ namespace cs2_osm_importer
                         way.Name = value;
                     else if (key == "ref")
                         way.Ref = value;
+                    else if (key == "service" && value == "parking_aisle")
+                        way.IsParkingAisle = true;
                     else if (key == "lanes" && TryReadLaneCount(value, out var parsedLaneCount))
                     {
                         way.Lanes = parsedLaneCount;
@@ -1798,7 +1802,8 @@ namespace cs2_osm_importer
                 HasRestrictedLanes = way.HasRestrictedLanes,
                 BikeLaneSide = way.BikeLaneSide,
                 RestrictedLaneSide = way.RestrictedLaneSide,
-                IsRoundabout = way.IsRoundabout
+                IsRoundabout = way.IsRoundabout,
+                IsParkingAisle = way.IsParkingAisle
             };
 
             if (reversed)
@@ -1862,7 +1867,8 @@ namespace cs2_osm_importer
                 HasRestrictedLanes = ways[0].HasRestrictedLanes,
                 BikeLaneSide = ways[0].BikeLaneSide,
                 RestrictedLaneSide = ways[0].RestrictedLaneSide,
-                IsRoundabout = ways[0].IsRoundabout
+                IsRoundabout = ways[0].IsRoundabout,
+                IsParkingAisle = ways[0].IsParkingAisle
             };
 
             if (merged.Lanes <= 0)
@@ -2654,6 +2660,10 @@ namespace cs2_osm_importer
 
             // A roundabout ring must stay separate from the roads that join it (ConvertRoundabouts needs both).
             if (a.IsRoundabout || b.IsRoundabout)
+                return false;
+
+            // Parking aisles may be replaced by a generated lot; keep them apart from driveways and streets.
+            if (a.IsParkingAisle != b.IsParkingAisle)
                 return false;
 
             if (!ApproximatelyEqual(a.BaseElevationOffsetMeters, b.BaseElevationOffsetMeters))
