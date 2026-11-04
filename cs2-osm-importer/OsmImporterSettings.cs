@@ -249,6 +249,9 @@ namespace cs2_osm_importer
         [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
         public bool DefaultGenerateRestrictedLanes { get; set; } = true;
 
+        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
+        public bool DefaultGenerateParkingLots { get; set; } = true;
+
         // Reset generate defaults button (rendered inline at the bottom of the generate defaults group)
         [SettingsUIButton]
         [SettingsUIConfirmation]
@@ -339,6 +342,7 @@ namespace cs2_osm_importer
             DefaultGenerateStopSigns = true;
             DefaultGenerateTrafficLights = true;
             DefaultGenerateRestrictedLanes = true;
+            DefaultGenerateParkingLots = true;
         }
 
         private static string GetDefaultOsmPath()

@@ -28,6 +28,7 @@
   "OsmImporter.Label.GenerateInstructions": "Choose which loaded road types should be generated.",
   "OsmImporter.Label.GenerateBikeLanes": "Bike lanes",
   "OsmImporter.Label.GenerateCrosswalks": "Crosswalks",
+  "OsmImporter.Label.GenerateParkingLots": "Parking lots",
   "OsmImporter.Label.GenerateRoads": "Generate Roads",
   "OsmImporter.Label.GenerateRestrictedLanes": "Restricted bus lanes",
   "OsmImporter.Label.GenerateStopSigns": "Stop signs",

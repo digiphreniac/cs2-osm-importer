@@ -119,6 +119,8 @@ namespace cs2_osm_importer
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateBikeLanes]", "Default state for the bike lanes toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateTurnRestrictions]", "Default: generate turn restrictions" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateTurnRestrictions]", "Default state for the turn restrictions toggle in the generate panel." },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParkingLots]", "Default: generate parking lots" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParkingLots]", "Default state for the parking lots toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateCrosswalks]", "Default: generate crosswalks" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateCrosswalks]", "Default state for the crosswalks toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateStopSigns]", "Default: generate stop signs" },
