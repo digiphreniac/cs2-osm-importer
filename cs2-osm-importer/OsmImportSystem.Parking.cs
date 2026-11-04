@@ -166,7 +166,13 @@ namespace cs2_osm_importer
                     var c0 = ParkingGeometry.Centroid(ring);
                     Mod.log.Info($"Parking lot {area.Id} at ({c0.x:F0}, {c0.y:F0}): no entrance street within {ParkingEntranceSearchMeters} m; nearest road of any kind {streets.NearestAnyRoadGap(ring):F1} m.");
                 }
-                var plan = ParkingLotLayout.Plan(ring, entranceInside, streetPoint, streetApproach, streets.IsNearStreet);
+                var plan = ParkingLotLayout.Plan(ring, entranceInside, streetPoint, streetApproach, streets.IsNearStreet, streets.IsInStreetConnectRange);
+                if (streetPoint.HasValue && plan.Stalls.Count > 0)
+                {
+                    var c1 = ParkingGeometry.Centroid(ring);
+                    var ee = streets.LastEntranceEdge;
+                    Mod.log.Info($"DIAG parking lot {area.Id} at ({c1.x:F1}, {c1.y:F1}): entrance to edge {ee.Index}:{ee.Version} ({(ee == Entity.Null ? "?" : _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(ee).m_Prefab))}) at ({streetPoint.Value.x:F1}, {streetPoint.Value.y:F1}), approach ({streetApproach.x:F1}, {streetApproach.y:F1}).");
+                }
                 if (plan.Stalls.Count == 0 && !string.IsNullOrEmpty(plan.SkipReason))
                     skipped[plan.SkipReason] = skipped.TryGetValue(plan.SkipReason, out var c) ? c + 1 : 1;
 
@@ -569,7 +575,7 @@ namespace cs2_osm_importer
         private sealed class ParkingStreetIndex
         {
             private const float Cell = 32f;
-            private readonly Dictionary<(int, int), List<(float2 A, float2 B, float Half, float2 E0, float2 E1)>> _cells = new Dictionary<(int, int), List<(float2, float2, float, float2, float2)>>();
+            private readonly Dictionary<(int, int), List<(float2 A, float2 B, float Half)>> _cells = new Dictionary<(int, int), List<(float2, float2, float)>>();
             public int EntranceRoads, OtherRoads;
             public readonly Dictionary<string, float> SpeedByPrefab = new Dictionary<string, float>();
 
@@ -606,6 +612,7 @@ namespace cs2_osm_importer
                     }
                     var prefabNameForEntrance = system._prefabSystem.GetPrefabName(prefab);
                     // Pedestrian streets only let service vehicles in; highways take no entrance.
+                    var isHighway = speed > ParkingMaxEntranceSpeed || (em.GetComponentData<RoadData>(prefab).m_Flags & Game.Prefabs.RoadFlags.UseHighwayRules) != 0;
                     var isEntranceRoad = hasCarLane && speed <= ParkingMaxEntranceSpeed
                                          && (em.GetComponentData<RoadData>(prefab).m_Flags & Game.Prefabs.RoadFlags.UseHighwayRules) == 0
                                          && prefabNameForEntrance.IndexOf("Pedestrian", StringComparison.OrdinalIgnoreCase) < 0;
@@ -618,25 +625,65 @@ namespace cs2_osm_importer
                     var mid = MathUtils.Position(curve, 0.5f);
                     if (mid.y - system.SampleTerrainHeight(mid) > 4f)
                         continue;
-                    // Only junction and dead-end nodes need clearance; a plain joint (two edges) does not.
                     var edgeNodes = em.GetComponentData<Edge>(e);
-                    var endA = IsSignificantNode(em, edgeNodes.m_Start) ? curve.a.xz : new float2(float.NaN);
-                    var endD = IsSignificantNode(em, edgeNodes.m_End) ? curve.d.xz : new float2(float.NaN);
+                    foreach (var node in new[] { edgeNodes.m_Start, edgeNodes.m_End })
+                    {
+                        // Junctions and dead ends: their node area covers the nearby street, which then builds no
+                        // connection lanes for a path end there.
+                        if (em.HasBuffer<ConnectedEdge>(node) && em.GetBuffer<ConnectedEdge>(node, true).Length != 2)
+                        {
+                            var np = em.GetComponentData<Game.Net.Node>(node).m_Position.xz;
+                            var nk = ((int)math.floor(np.x / Cell), (int)math.floor(np.y / Cell));
+                            if (!_junctions.TryGetValue(nk, out var jl))
+                                _junctions[nk] = jl = new List<float2>();
+                            jl.Add(np);
+                        }
+                    }
                     // The last edge of a dead end (turning circle) never links a path end.
                     if (IsDeadEnd(em, edgeNodes.m_Start) || IsDeadEnd(em, edgeNodes.m_End))
                         isEntranceRoad = false;
+                    if (isEntranceRoad)
+                    {
+                        var midPoint = MathUtils.Position(curve, 0.5f).xz;
+                        var midDir = math.normalizesafe(MathUtils.Tangent(curve, 0.5f).xz);
+                        var length = MathUtils.Length(curve.xz);
+                        var key = ((int)math.floor(midPoint.x / Cell), (int)math.floor(midPoint.y / Cell));
+                        if (!_edgeMids.TryGetValue(key, out var mids))
+                            _edgeMids[key] = mids = new List<(Entity, float2, float2, float, float)>();
+                        mids.Add((e, midPoint, midDir, half, length));
+                    }
                     var prev = curve.a.xz;
                     for (var i = 1; i <= 8; i++)
                     {
                         var next = MathUtils.Position(curve, i / 8f).xz;
                         // Negative half width marks a road that may not take an entrance (still kept clear of stalls).
-                        Add(prev, next, isEntranceRoad ? half : -half, endA, endD);
+                        Add(prev, next, isEntranceRoad ? half : -half);
+                        if (isHighway)
+                            AddHighway(prev, next, half);
                         prev = next;
                     }
                 }
             }
 
-            private void Add(float2 a, float2 b, float half, float2 e0, float2 e1)
+            private readonly List<(float2 A, float2 B, float Half)> _highways = new List<(float2, float2, float)>();
+            private readonly Dictionary<(int, int), List<int>> _highwayCells = new Dictionary<(int, int), List<int>>();
+
+            private void AddHighway(float2 a, float2 b, float half)
+            {
+                var index = _highways.Count;
+                _highways.Add((a, b, half));
+                var min = math.min(a, b) - half;
+                var max = math.max(a, b) + half;
+                for (var x = (int)math.floor(min.x / Cell); x <= (int)math.floor(max.x / Cell); x++)
+                for (var z = (int)math.floor(min.y / Cell); z <= (int)math.floor(max.y / Cell); z++)
+                {
+                    if (!_highwayCells.TryGetValue((x, z), out var list))
+                        _highwayCells[(x, z)] = list = new List<int>();
+                    list.Add(index);
+                }
+            }
+
+            private void Add(float2 a, float2 b, float half)
             {
                 var min = math.min(a, b) - math.abs(half);
                 var max = math.max(a, b) + math.abs(half);
@@ -644,12 +691,12 @@ namespace cs2_osm_importer
                 for (var z = (int)math.floor(min.y / Cell); z <= (int)math.floor(max.y / Cell); z++)
                 {
                     if (!_cells.TryGetValue((x, z), out var list))
-                        _cells[(x, z)] = list = new List<(float2, float2, float, float2, float2)>();
-                    list.Add((a, b, half, e0, e1));
+                        _cells[(x, z)] = list = new List<(float2, float2, float)>();
+                    list.Add((a, b, half));
                 }
             }
 
-            private IEnumerable<(float2 A, float2 B, float Half, float2 E0, float2 E1)> Near(float2 min, float2 max)
+            private IEnumerable<(float2 A, float2 B, float Half)> Near(float2 min, float2 max)
             {
                 var seen = new HashSet<(float2, float2)>();
                 for (var x = (int)math.floor(min.x / Cell); x <= (int)math.floor(max.x / Cell); x++)
@@ -675,58 +722,47 @@ namespace cs2_osm_importer
             /// Nearest entrance street to the outline: insidePoint is 1.5 m inside the outline where the lot is closest to
             /// that street, outsidePoint is just beyond the street's edge on the lot's side (where the path ends).
             /// </summary>
+            public Entity LastEntranceEdge;
+
             public bool TryFindEntrance(IReadOnlyList<float2> ring, out float2 insidePoint, out float2 outsidePoint, out float2 approachPoint)
             {
                 insidePoint = outsidePoint = approachPoint = default;
                 var b = ParkingGeometry.Bounds(ring);
                 var reach = ParkingEntranceSearchMeters;
+                // Aim at the middle of a street edge: a path end beside an edge's end is handed to the street node
+                // there (LaneSystem.CheckConnectPosition) and gets no car connection. Importer edges are ~14 m long.
                 var best = float.MaxValue;
-                (float2 A, float2 B, float Half, float2 E0, float2 E1) bestStreet = default;
                 var bestRing = float2.zero;
-                var bestRoad = float2.zero;
-                foreach (var s in Near(new float2(b.x, b.y) - reach, new float2(b.z, b.w) + reach))
+                (Entity Edge, float2 Mid, float2 Dir, float Half, float Length) bestEdge = default;
+                for (var x = (int)math.floor((b.x - reach) / Cell); x <= (int)math.floor((b.z + reach) / Cell); x++)
+                for (var z = (int)math.floor((b.y - reach) / Cell); z <= (int)math.floor((b.w + reach) / Cell); z++)
                 {
-                    if (s.Half <= 0f)
+                    if (!_edgeMids.TryGetValue((x, z), out var mids))
                         continue;
-                    for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+                    foreach (var m in mids)
                     {
-                        // Closest pair between the street piece and this outline edge (endpoint tests suffice for straight pieces).
-                        foreach (var (_, closest) in ClosestPairs(ring[j], ring[i], s.A, s.B))
+                        if (m.Length < EntranceMinEdgeLength || NearJunction(m.Mid))
+                            continue;
+                        var onRing = ClosestOnRing(ring, m.Mid);
+                        var gap = math.distance(onRing, m.Mid) - m.Half;
+                        if (gap < best)
                         {
-                            // The street only links a path end beside its middle: keep clear of the edge ends.
-                            if (!TryKeepFromEdgeEnds(closest, s.A, s.B, s.E0, s.E1, out var onRoad))
-                                continue;
-                            var onRing = ParkingGeometry.ClosestOnSegment(onRoad, ring[j], ring[i]);
-                            var gap = math.distance(onRing, onRoad) - s.Half;
-                            if (gap < best)
-                            {
-                                best = gap;
-                                bestStreet = s;
-                                bestRing = onRing;
-                                bestRoad = onRoad;
-                            }
+                            best = gap;
+                            bestRing = onRing;
+                            bestEdge = m;
                         }
                     }
                 }
                 if (best > reach)
                     return false;
+                LastEntranceEdge = bestEdge.Edge;
 
                 var centroid = ParkingGeometry.Centroid(ring);
-                var toLot = bestRing - bestRoad;
-                if (math.lengthsq(toLot) < 1f)
-                {
-                    // The outline reaches onto the street: go out on the street's side facing the lot.
-                    var dir = math.normalizesafe(bestStreet.B - bestStreet.A);
-                    var normal = new float2(-dir.y, dir.x);
-                    toLot = math.dot(centroid - bestRoad, normal) >= 0f ? normal : -normal;
-                }
-                toLot = math.normalizesafe(toLot);
-                // Square to the street piece, on the lot side.
-                var pieceDir = math.normalizesafe(bestStreet.B - bestStreet.A);
-                var square = new float2(-pieceDir.y, pieceDir.x);
-                if (math.dot(square, toLot) < 0f)
+                var square = new float2(-bestEdge.Dir.y, bestEdge.Dir.x);
+                var towardLot = math.lengthsq(bestRing - bestEdge.Mid) > 1f ? bestRing - bestEdge.Mid : centroid - bestEdge.Mid;
+                if (math.dot(square, towardLot) < 0f)
                     square = -square;
-                outsidePoint = bestRoad + square * (bestStreet.Half + 0.3f);
+                outsidePoint = bestEdge.Mid + square * (bestEdge.Half + 0.3f);
                 approachPoint = outsidePoint + square * 5f;
                 insidePoint = bestRing + math.normalizesafe(centroid - bestRing) * 1.5f;
                 if (!ParkingGeometry.Contains(ring, insidePoint))
@@ -734,42 +770,59 @@ namespace cs2_osm_importer
                 return true;
             }
 
-            private const float EntranceEdgeEndClearance = 10f; // about a junction's node area on a Small Road
+            private const float EntranceMinEdgeLength = 8f;
+            // Invisible Road Path local connect: path half width 2 + search distance 4 beyond the street's edge.
+            private const float LocalConnectReach = 6f;
+            private readonly Dictionary<(int, int), List<(Entity Edge, float2 Mid, float2 Dir, float Half, float Length)>> _edgeMids =
+                new Dictionary<(int, int), List<(Entity, float2, float2, float, float)>>();
+
+            private const float EntranceJunctionClearance = 15f;
+            private readonly Dictionary<(int, int), List<float2>> _junctions = new Dictionary<(int, int), List<float2>>();
+
+            private bool NearJunction(float2 p)
+            {
+                for (var x = (int)math.floor((p.x - EntranceJunctionClearance) / Cell); x <= (int)math.floor((p.x + EntranceJunctionClearance) / Cell); x++)
+                for (var z = (int)math.floor((p.y - EntranceJunctionClearance) / Cell); z <= (int)math.floor((p.y + EntranceJunctionClearance) / Cell); z++)
+                    if (_junctions.TryGetValue((x, z), out var list))
+                        foreach (var j in list)
+                            if (math.distance(j, p) < EntranceJunctionClearance)
+                                return true;
+                return false;
+            }
+
+            /// <summary>
+            /// True where a path dead end would link by itself to a highway. Extra exits onto ordinary streets are
+            /// allowed, as in real lots.
+            /// </summary>
+            public bool IsInStreetConnectRange(float2 p)
+            {
+                for (var x = (int)math.floor((p.x - 20f) / Cell); x <= (int)math.floor((p.x + 20f) / Cell); x++)
+                for (var z = (int)math.floor((p.y - 20f) / Cell); z <= (int)math.floor((p.y + 20f) / Cell); z++)
+                    if (_highwayCells.TryGetValue((x, z), out var list))
+                        foreach (var i in list)
+                        {
+                            var h = _highways[i];
+                            if (ParkingGeometry.DistanceToSegment(p, h.A, h.B) < h.Half + LocalConnectReach + 1f)
+                                return true;
+                        }
+                return false;
+            }
+
+            private static float2 ClosestOnRing(IReadOnlyList<float2> ring, float2 p)
+            {
+                var best = ring[0];
+                var bestDistance = float.MaxValue;
+                for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+                {
+                    var c = ParkingGeometry.ClosestOnSegment(p, ring[j], ring[i]);
+                    var d = math.distancesq(c, p);
+                    if (d < bestDistance) { bestDistance = d; best = c; }
+                }
+                return best;
+            }
 
             private static bool IsDeadEnd(EntityManager em, Entity node) =>
                 em.HasBuffer<ConnectedEdge>(node) && em.GetBuffer<ConnectedEdge>(node, true).Length == 1;
-
-            private static bool IsSignificantNode(EntityManager em, Entity node) =>
-                !em.HasBuffer<ConnectedEdge>(node) || em.GetBuffer<ConnectedEdge>(node, true).Length != 2;
-
-            private static bool TryKeepFromEdgeEnds(float2 p, float2 a, float2 b, float2 e0, float2 e1, out float2 result)
-            {
-                result = p;
-                var dir = math.normalizesafe(b - a);
-                var len = math.distance(a, b);
-                var t = math.dot(p - a, dir);
-                foreach (var e in new[] { e0, e1 })
-                {
-                    if (math.any(math.isnan(e)) || math.distance(result, e) >= EntranceEdgeEndClearance)
-                        continue;
-                    // Slide along the piece away from that end.
-                    var away = math.dot(result - e, dir) >= 0f ? 1f : -1f;
-                    if (math.dot(a - e, dir) * away < 0f || math.distance(a, e) < 0.01f || math.distance(b, e) < 0.01f)
-                        away = math.distance(a, e) < math.distance(b, e) ? 1f : -1f;
-                    t = math.clamp(t + away * (EntranceEdgeEndClearance - math.distance(result, e) + 0.1f), 0f, len);
-                    result = a + dir * t;
-                }
-                return (math.any(math.isnan(e0)) || math.distance(result, e0) >= EntranceEdgeEndClearance - 0.05f) &&
-                       (math.any(math.isnan(e1)) || math.distance(result, e1) >= EntranceEdgeEndClearance - 0.05f);
-            }
-
-            private static IEnumerable<(float2, float2)> ClosestPairs(float2 a0, float2 a1, float2 b0, float2 b1)
-            {
-                yield return (a0, ParkingGeometry.ClosestOnSegment(a0, b0, b1));
-                yield return (a1, ParkingGeometry.ClosestOnSegment(a1, b0, b1));
-                yield return (ParkingGeometry.ClosestOnSegment(b0, a0, a1), b0);
-                yield return (ParkingGeometry.ClosestOnSegment(b1, a0, a1), b1);
-            }
         }
     }
 }

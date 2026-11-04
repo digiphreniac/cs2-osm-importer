@@ -171,7 +171,8 @@ namespace cs2_osm_importer
         /// <param name="streetPoint">Where the entrance path ends (just outside the street's edge), or null for no entrance.</param>
         /// <param name="streetApproach">A point a few metres back from streetPoint, square to the street.</param>
         /// <param name="blocked">True where a stall corner must not go (on or next to a street).</param>
-        public static ParkingLotPlan Plan(IReadOnlyList<float2> ring, float2 entranceInside, float2? streetPoint, float2 streetApproach, Func<float2, bool> blocked)
+        /// <param name="deadEndBlocked">True where an aisle end would link to a street by itself.</param>
+        public static ParkingLotPlan Plan(IReadOnlyList<float2> ring, float2 entranceInside, float2? streetPoint, float2 streetApproach, Func<float2, bool> blocked, Func<float2, bool> deadEndBlocked = null)
         {
             var plan = new ParkingLotPlan();
             if (!streetPoint.HasValue)
@@ -225,6 +226,13 @@ namespace cs2_osm_importer
                     continue;
                 u0 += AisleEndMargin;
                 u1 -= AisleEndMargin;
+                // An aisle end near any street would link to it by itself (unplanned exits, even onto highways):
+                // only the entrance may meet a street.
+                if (deadEndBlocked != null)
+                {
+                    while (u1 - u0 >= MinAisleLength && deadEndBlocked(W(u0, a.V))) u0 += 1f;
+                    while (u1 - u0 >= MinAisleLength && deadEndBlocked(W(u1, a.V))) u1 -= 1f;
+                }
                 if (u1 - u0 >= MinAisleLength)
                     aisleSpans.Add((a.V, u0, u1, a.Below, a.Above));
             }
