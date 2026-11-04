@@ -72,6 +72,10 @@ namespace cs2_osm_importer
         public bool GenerateTrafficLights { get; set; } = true;
         public bool GenerateRestrictedLanes { get; set; } = true;
 
+        // Build amenity=parking surface lots (pavement + aisles + working stalls) and skip the OSM parking aisles
+        // inside them, which the generated aisles replace.
+        public bool GenerateParkingLots { get; set; } = true;
+
         // Road segments queued per frame within a generation phase. 0 (default) = all in one frame, which avoids
         // CS2 merging new points into nodes from earlier frames (see OsmImportSystem.SegmentsPerFrameLimit).
         // Only lower it to spread a very large import over frames, at the cost of broken chains at batch boundaries.

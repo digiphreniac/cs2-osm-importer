@@ -317,6 +317,8 @@ namespace cs2_osm_importer
             _phase = WorkPhase.DeleteRoads;
             _pendingDeleteEntities = _generatedEdgeEntities.Where(entity => entity != Entity.Null).ToList();
             _pendingDeleteEntities.AddRange(FindRoundaboutObjectsOn(_pendingDeleteEntities));
+            // Deleting a lot's surface also deletes the aisles and stalls it owns.
+            _pendingDeleteEntities.AddRange(TakeGeneratedParkingLots());
             _pendingDeleteIndex = 0;
             _deletedEdgeCount = 0;
             _deleteCompletionPending = false;
@@ -461,6 +463,7 @@ namespace cs2_osm_importer
                 }
                 _roadNamesApplied = false;
                 _roadServiceUpgradesApplied = false;
+                ResetParkingLotState();
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
@@ -776,6 +779,15 @@ namespace cs2_osm_importer
 
                     ApplyQueuedRoadNames();
                     ApplyRoadServiceUpgrades();
+
+                    // Parking lots last: their entrances need the finished streets, and their own path edges must not
+                    // be mistaken for roads by the name matching above.
+                    if (ProcessParkingLotStep())
+                    {
+                        _applyWaitFrames = 0;
+                        return;
+                    }
+
                     var message = generatedRoadEdges > 0
                         ? LF("OsmImporter.Status.GeneratedRoads", "CS2 consumed {0} road definitions; detected {1} new road edges. Import bounds: {2}.", _importedSegments, generatedRoadEdges, ShortBounds(_document))
                         : LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
@@ -4062,6 +4074,7 @@ namespace cs2_osm_importer
             return _document.Ways
                 .Where(way => string.Equals(way.Highway, highwayType, StringComparison.OrdinalIgnoreCase) &&
                               (includeRoundabouts || !way.IsRoundabout) &&
+                              !(way.IsInsideParkingLot && (_activeGenerateOptions?.GenerateParkingLots ?? false)) &&
                               (includeRoundaboutConnectors || !_roundaboutConnectorWayIds.Contains(way.Id)))
                 .ToList();
         }
