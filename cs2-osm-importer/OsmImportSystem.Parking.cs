@@ -192,11 +192,146 @@ namespace cs2_osm_importer
                 _queuedParkingLots.Add(queued);
             }
 
+            QueueParkingGarages(streets);
+
             Mod.log.Info($"Queued {lots.Count} surface parking lots with {stallCount} stalls. Pavement only: " +
                          (skipped.Count == 0 ? "none" : string.Join(", ", skipped.Select(s => $"{s.Value} ({s.Key})"))) +
                          $". Not built as surface lots: {_document.ParkingAreas.Count - lots.Count} (" +
                          string.Join(", ", _document.ParkingAreas.Where(a => a.Kind != OsmParkingKind.Surface).GroupBy(a => a.Kind).Select(g => $"{g.Key}={g.Count()}")) + ").");
-            return _queuedParkingLots.Count > 0;
+            return _queuedParkingLots.Count > 0 || _queuedGarages > 0;
+        }
+
+        // Vanilla parking buildings for parking=multi-storey (footprints from ObjectGeometryData, game 1.6.2f1):
+        // ParkingHall04 23.6 x 47.6, ParkingHall03 63.6 x 47.6, ParkingHall01 95.6 x 111.6. ParkingHall02 (47.6 x 79.6,
+        // a low deck) is left out: placed by definition it stayed in an error state in the editor (seen twice, Seattle).
+        private static readonly string[] ParkingGaragePrefabNames = { "ParkingHall04", "ParkingHall03", "ParkingHall01" };
+        private const float ParkingGarageMaxFrontGap = 15f;
+        private readonly List<Entity> _parkingGaragePrefabs = new List<Entity>();
+        private HashSet<Entity> _parkingBaselineGarages = new HashSet<Entity>();
+        private int _queuedGarages;
+
+        /// <summary>
+        /// One vanilla parking building per multi-storey outline: the footprint closest to the outline's minimum-area
+        /// rectangle, its front (local +z) facing the nearest street, moved up to that street when the gap is small so it
+        /// gets road access.
+        /// </summary>
+        private void QueueParkingGarages(ParkingStreetIndex streets)
+        {
+            _queuedGarages = 0;
+            _parkingGaragePrefabs.Clear();
+            foreach (var name in ParkingGaragePrefabNames)
+            {
+                var p = FindPrefabByName(name);
+                if (p != Entity.Null && EntityManager.HasComponent<ObjectGeometryData>(p))
+                    _parkingGaragePrefabs.Add(p);
+            }
+            _parkingBaselineGarages = new HashSet<Entity>();
+            foreach (var p in _parkingGaragePrefabs)
+                _parkingBaselineGarages.UnionWith(QueryEntitiesWithPrefab(p, ComponentType.ReadOnly<ObjectTransform>()));
+            if (_parkingGaragePrefabs.Count == 0)
+                return;
+
+            foreach (var area in _document.ParkingAreas.Where(a => a.Kind == OsmParkingKind.MultiStorey))
+            {
+                var rect = ParkingGeometry.MinAreaRectangle(area.Ring);
+                // Front faces the street; without one, the long side faces +v.
+                var front = rect.AxisV;
+                if (streets.TryFindEntrance(area.Ring, out _, out var streetPoint, out _))
+                {
+                    var toStreet = streetPoint - rect.Center;
+                    front = math.abs(math.dot(toStreet, rect.AxisU)) > math.abs(math.dot(toStreet, rect.AxisV))
+                        ? rect.AxisU * math.sign(math.dot(toStreet, rect.AxisU))
+                        : rect.AxisV * math.sign(math.dot(toStreet, rect.AxisV));
+                }
+                var frontIsU = math.abs(math.dot(front, rect.AxisU)) > 0.5f;
+                var frontage = frontIsU ? rect.SizeV : rect.SizeU; // building width runs along the street
+                var depth = frontIsU ? rect.SizeU : rect.SizeV;
+
+                // Best-fitting footprint first; a footprint that would stand on a street is not used (the game puts
+                // such a building in an error state). Front edge moved up to the street when close, for road access.
+                var hasStreet = streets.TryFindEntrance(area.Ring, out _, out var outside, out _);
+                var best = Entity.Null;
+                float2 bestSize = default;
+                var center = rect.Center;
+                foreach (var p in _parkingGaragePrefabs.OrderBy(p =>
+                         {
+                             var s = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
+                             return math.abs(math.log(s.x / math.max(1f, frontage))) + math.abs(math.log(s.y / math.max(1f, depth)));
+                         }))
+                {
+                    var size = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
+                    var candidates = new List<float2>();
+                    if (hasStreet)
+                    {
+                        var gap = math.dot(outside - (rect.Center + front * (size.y * 0.5f)), front);
+                        if (math.abs(gap) <= ParkingGarageMaxFrontGap)
+                            candidates.Add(rect.Center + front * gap);
+                    }
+                    candidates.Add(rect.Center);
+                    foreach (var c in candidates)
+                    {
+                        if (FootprintOnStreet(streets, c, front, size))
+                            continue;
+                        best = p;
+                        bestSize = size;
+                        center = c;
+                        break;
+                    }
+                    if (best != Entity.Null)
+                        break;
+                }
+                if (best == Entity.Null)
+                {
+                    Mod.log.Info($"Parking garage {area.Id}: no vanilla parking building fits without standing on a street; skipped.");
+                    continue;
+                }
+
+                var position = Lift(center);
+                var rotation = quaternion.RotateY(math.atan2(front.x, front.y));
+                var entity = EntityManager.CreateEntity();
+                EntityManager.AddComponentData(entity, new CreationDefinition { m_Prefab = best, m_Flags = CreationFlags.Permanent, m_RandomSeed = (int)(area.Id & 0x7fffffff) });
+                EntityManager.AddComponentData(entity, new Game.Tools.ObjectDefinition
+                {
+                    m_Position = position,
+                    m_LocalPosition = position,
+                    m_Rotation = rotation,
+                    m_LocalRotation = rotation,
+                    m_Scale = new float3(1f),
+                    m_Intensity = 1f,
+                    m_Probability = 100,
+                    m_ParentMesh = -1,
+                    m_PrefabSubIndex = -1
+                });
+                EntityManager.AddComponentData(entity, new Updated());
+                EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
+                _parkingDefinitions.Add(entity);
+                _queuedGarages++;
+                Mod.log.Info($"Parking garage {area.Id} at ({center.x:F0}, {center.y:F0}): outline {rect.SizeU:F0} x {rect.SizeV:F0} m -> {_prefabSystem.GetPrefabName(best)} ({bestSize.x:F0} x {bestSize.y:F0} m).");
+            }
+        }
+
+        /// <summary>Samples the footprint (front along +front, width across) on a 4 m grid against the street index.</summary>
+        private static bool FootprintOnStreet(ParkingStreetIndex streets, float2 center, float2 front, float2 size)
+        {
+            var side = new float2(front.y, -front.x);
+            for (var w = -size.x * 0.5f + 1f; w <= size.x * 0.5f - 1f; w += 4f)
+            for (var d = -size.y * 0.5f + 1f; d <= size.y * 0.5f - 1f; d += 4f)
+                if (streets.IsNearStreet(center + side * w + front * d))
+                    return true;
+            return false;
+        }
+
+        private int TrackGeneratedGarages()
+        {
+            var count = 0;
+            foreach (var p in _parkingGaragePrefabs)
+                foreach (var e in QueryEntitiesWithPrefab(p, ComponentType.ReadOnly<ObjectTransform>()))
+                    if (!_parkingBaselineGarages.Contains(e) && !EntityManager.HasComponent<Owner>(e))
+                    {
+                        _generatedParkingSurfaces.Add(e);
+                        count++;
+                    }
+            return count;
         }
 
         private float3 Lift(float2 p) => new float3(p.x, SampleTerrainHeight(new float3(p.x, 0f, p.y)), p.y);
@@ -393,9 +528,10 @@ namespace cs2_osm_importer
                 }
             }
 
-            HasGeneratedAssets |= built > 0;
-            Mod.log.Info($"Parking lots built: {built} surfaces, {ownedStalls} stalls owned, {pathsByLot.Values.Sum(p => p.Count)} aisle edges; " +
-                         $"{noSurface} outlines rejected by the game (aisles/stalls removed).");
+            var garages = TrackGeneratedGarages();
+            HasGeneratedAssets |= built > 0 || garages > 0;
+            Mod.log.Info($"Parking lots built: {built} surfaces, {ownedStalls} stalls owned, {pathsByLot.Values.Sum(p => p.Count)} aisle edges, " +
+                         $"{garages}/{_queuedGarages} garages; {noSurface} outlines rejected by the game (aisles/stalls removed).");
         }
 
         private static (int, int) PointKey(float2 p, float scale) => ((int)math.round(p.x * scale), (int)math.round(p.y * scale));
