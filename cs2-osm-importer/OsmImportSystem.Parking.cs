@@ -294,23 +294,8 @@ namespace cs2_osm_importer
 
                 var position = Lift(center);
                 var rotation = quaternion.RotateY(math.atan2(front.x, front.y));
-                var entity = EntityManager.CreateEntity();
-                EntityManager.AddComponentData(entity, new CreationDefinition { m_Prefab = best, m_Flags = CreationFlags.Permanent, m_RandomSeed = (int)(area.Id & 0x7fffffff) });
-                EntityManager.AddComponentData(entity, new Game.Tools.ObjectDefinition
-                {
-                    m_Position = position,
-                    m_LocalPosition = position,
-                    m_Rotation = rotation,
-                    m_LocalRotation = rotation,
-                    m_Scale = new float3(1f),
-                    m_Intensity = 1f,
-                    m_Probability = 100,
-                    m_ParentMesh = -1,
-                    m_PrefabSubIndex = -1
-                });
-                EntityManager.AddComponentData(entity, new Updated());
-                EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
-                _parkingDefinitions.Add(entity);
+                // With its internal ramps, parking and sub-areas, as the game's own tool would place it.
+                QueueBuildingWithSubElements(best, position, rotation, (int)(area.Id & 0x7fffffff), _parkingDefinitions);
                 _queuedGarages++;
                 Mod.log.Info($"Parking garage {area.Id} at ({center.x:F0}, {center.y:F0}): outline {rect.SizeU:F0} x {rect.SizeV:F0} m -> {_prefabSystem.GetPrefabName(best)} ({bestSize.x:F0} x {bestSize.y:F0} m).");
             }
