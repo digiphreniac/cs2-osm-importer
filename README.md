@@ -43,6 +43,14 @@ Choose which loaded road types to generate, then click **Generate Roads**.
 |:-------------------------------------------------------------------------------------------:|:----------------------------------------------------------------------------------------------:|
 |                                       1: Import Data                                        |                                       2: Generate Roads                                        |
 
+## Known issues
+
+- **Some parking lots are not connected to a street.** A small share of imported surface parking lots (under 3% in the
+  test areas) are built with their pavement and stalls, but cars cannot reach them. Known causes:
+  - Another network lies between the lot and the street at the entrance point, such as a separately mapped bike path
+    (cycleway) or tram line. The lot's entrance links to that network instead of the street.
+  - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
+
 ## How it works (for developers)
 
 The mod follows CS2's **ECS pattern** with a custom `OsmImportDefinition` component and two systems:

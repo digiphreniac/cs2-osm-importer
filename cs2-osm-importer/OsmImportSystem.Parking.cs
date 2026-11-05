@@ -211,7 +211,6 @@ namespace cs2_osm_importer
         // ParkingHall04 23.6 x 47.6, ParkingHall03 63.6 x 47.6, ParkingHall01 95.6 x 111.6. ParkingHall02 (47.6 x 79.6,
         // a low deck) is left out: placed by definition it stayed in an error state in the editor (seen twice, Seattle).
         private static readonly string[] ParkingGaragePrefabNames = { "ParkingHall04", "ParkingHall03", "ParkingHall01" };
-        private const float ParkingGarageMaxFrontGap = 15f;
         private readonly List<Entity> _parkingGaragePrefabs = new List<Entity>();
         private HashSet<Entity> _parkingBaselineGarages = new HashSet<Entity>();
         private int _queuedGarages;
@@ -240,47 +239,48 @@ namespace cs2_osm_importer
             foreach (var area in _document.ParkingAreas.Where(a => a.Kind == OsmParkingKind.MultiStorey))
             {
                 var rect = ParkingGeometry.MinAreaRectangle(area.Ring);
-                // Front faces the street; without one, the long side faces +v.
-                var front = rect.AxisV;
-                if (streets.TryFindEntrance(area.Ring, out _, out var streetPoint, out _))
-                {
-                    var toStreet = streetPoint - rect.Center;
-                    front = math.abs(math.dot(toStreet, rect.AxisU)) > math.abs(math.dot(toStreet, rect.AxisV))
-                        ? rect.AxisU * math.sign(math.dot(toStreet, rect.AxisU))
-                        : rect.AxisV * math.sign(math.dot(toStreet, rect.AxisV));
-                }
-                var frontIsU = math.abs(math.dot(front, rect.AxisU)) > 0.5f;
-                var frontage = frontIsU ? rect.SizeV : rect.SizeU; // building width runs along the street
-                var depth = frontIsU ? rect.SizeU : rect.SizeV;
-
-                // Best-fitting footprint first; a footprint that would stand on a street is not used (the game puts
-                // such a building in an error state). Front edge moved up to the street when close, for road access.
-                var hasStreet = streets.TryFindEntrance(area.Ring, out _, out var outside, out _);
+                // Every side of the outline that faces a street, nearest first; the long side faces +v without one.
+                var frontages = streets.FindFrontages(rect);
+                var front = frontages.Count > 0 ? frontages[0].Front : rect.AxisV;
+                // For each street-facing side (nearest first) and each footprint (best fit first): the front edge on that
+                // street, centred on the nearest street point. A footprint standing on a street, or whose front is within the game's
+                // 8.4 m connection reach of a pedestrian street or highway (it would link to that instead), is skipped.
+                // A garage with no usable side is not built: without road access it would never be used.
                 var best = Entity.Null;
                 float2 bestSize = default;
                 var center = rect.Center;
-                foreach (var p in _parkingGaragePrefabs.OrderBy(p =>
-                         {
-                             var s = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
-                             return math.abs(math.log(s.x / math.max(1f, frontage))) + math.abs(math.log(s.y / math.max(1f, depth)));
-                         }))
+                foreach (var (sideFront, outside, _) in frontages)
                 {
-                    var size = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
-                    var candidates = new List<float2>();
-                    if (hasStreet)
+                    var frontIsU = math.abs(math.dot(sideFront, rect.AxisU)) > 0.5f;
+                    var frontage = frontIsU ? rect.SizeV : rect.SizeU; // building width runs along the street
+                    var depth = frontIsU ? rect.SizeU : rect.SizeV;
+                    var side = new float2(sideFront.y, -sideFront.x);
+                    foreach (var p in _parkingGaragePrefabs.OrderBy(p =>
+                             {
+                                 var sz = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
+                                 return math.abs(math.log(sz.x / math.max(1f, frontage))) + math.abs(math.log(sz.y / math.max(1f, depth)));
+                             }))
                     {
-                        var gap = math.dot(outside - (rect.Center + front * (size.y * 0.5f)), front);
-                        if (math.abs(gap) <= ParkingGarageMaxFrontGap)
-                            candidates.Add(rect.Center + front * gap);
-                    }
-                    candidates.Add(rect.Center);
-                    foreach (var c in candidates)
-                    {
-                        if (FootprintOnStreet(streets, c, front, size))
+                        var size = EntityManager.GetComponentData<ObjectGeometryData>(p).m_Size.xz;
+                        // Slide along the side from the outline's middle towards the street point: the game measures its 8.4 m
+                        // reach from the middle of the front edge, so that point must end up next to the street.
+                        var latMiddle = math.dot(rect.Center - outside, side);
+                        var placed = false;
+                        foreach (var f in new[] { 1f, 0.75f, 0.5f, 0.25f, 0f })
+                        {
+                            var c = outside + side * (latMiddle * f) - sideFront * (size.y * 0.5f);
+                            var frontMiddle = c + sideFront * (size.y * 0.5f);
+                            if (streets.EntranceRoadGap(frontMiddle) > 6f || FootprintOnStreet(streets, c, sideFront, size) || streets.NonEntranceRoadNear(frontMiddle, 8.4f))
+                                continue;
+                            center = c;
+                            placed = true;
+                            break;
+                        }
+                        if (!placed)
                             continue;
                         best = p;
                         bestSize = size;
-                        center = c;
+                        front = sideFront;
                         break;
                     }
                     if (best != Entity.Null)
@@ -288,7 +288,7 @@ namespace cs2_osm_importer
                 }
                 if (best == Entity.Null)
                 {
-                    Mod.log.Info($"Parking garage {area.Id}: no vanilla parking building fits without standing on a street; skipped.");
+                    Mod.log.Info($"Parking garage {area.Id}: no vanilla parking building fits facing a street without standing on one; skipped.");
                     continue;
                 }
 
@@ -708,6 +708,68 @@ namespace cs2_osm_importer
             /// that street, outsidePoint is just beyond the street's edge on the lot's side (where the path ends).
             /// </summary>
             public Entity LastEntranceEdge;
+
+            /// <summary>
+            /// For a building: the side of the rectangle closest to a street with car lanes (front = that side's outward
+            /// direction) and the point just off that street's edge where the front edge should go.
+            /// </summary>
+            public List<(float2 Front, float2 Outside, float Gap)> FindFrontages(ParkingGeometry.OrientedRect rect)
+            {
+                var result = new List<(float2, float2, float)>();
+                foreach (var dir in new[] { rect.AxisU, -rect.AxisU, rect.AxisV, -rect.AxisV })
+                {
+                    var reachOut = math.abs(math.dot(dir, rect.AxisU)) > 0.5f ? rect.SizeU * 0.5f : rect.SizeV * 0.5f;
+                    var along = math.abs(math.dot(dir, rect.AxisU)) > 0.5f ? rect.SizeV * 0.5f : rect.SizeU * 0.5f;
+                    var side = new float2(dir.y, -dir.x);
+                    var mid = rect.Center + dir * reachOut;
+                    var best = ParkingEntranceSearchMeters;
+                    var bestOutside = float2.zero;
+                    var found = false;
+                    for (var k = -2; k <= 2; k++)
+                    {
+                        var p = mid + side * (along * k / 2f);
+                        foreach (var s in Near(p - ParkingEntranceSearchMeters, p + ParkingEntranceSearchMeters))
+                        {
+                            if (s.Half <= 0f)
+                                continue;
+                            var onRoad = ParkingGeometry.ClosestOnSegment(p, s.A, s.B);
+                            if (math.dot(onRoad - mid, dir) < -1f)
+                                continue; // only streets in front of this side
+                            var gap = math.distance(p, onRoad) - s.Half;
+                            if (gap < best)
+                            {
+                                best = gap;
+                                bestOutside = onRoad - dir * (s.Half + 0.3f);
+                                found = true;
+                            }
+                        }
+                    }
+                    if (found)
+                        result.Add((dir, bestOutside, best));
+                }
+                result.Sort((x, y) => x.Item3.CompareTo(y.Item3));
+                return result;
+            }
+
+            /// <summary>True when a road that cannot take an entrance (pedestrian street, highway) lies within the
+            /// game's building-connection reach (8.4 m) of a point: the building would link to it instead.</summary>
+            /// <summary>Distance from a point to the edge of the nearest street that can take an entrance.</summary>
+            public float EntranceRoadGap(float2 p)
+            {
+                var best = float.MaxValue;
+                foreach (var s in Near(p - 30f, p + 30f))
+                    if (s.Half > 0f)
+                        best = math.min(best, ParkingGeometry.DistanceToSegment(p, s.A, s.B) - s.Half);
+                return best;
+            }
+
+            public bool NonEntranceRoadNear(float2 p, float reach)
+            {
+                foreach (var s in Near(p - reach - 20f, p + reach + 20f))
+                    if (s.Half < 0f && ParkingGeometry.DistanceToSegment(p, s.A, s.B) + s.Half < reach)
+                        return true;
+                return false;
+            }
 
             public bool TryFindEntrance(IReadOnlyList<float2> ring, out float2 insidePoint, out float2 outsidePoint, out float2 approachPoint)
             {
