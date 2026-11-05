@@ -130,6 +130,30 @@ namespace cs2_osm_importer
         // natural=wood / landuse=forest outlines lying inside the park.
         public List<List<float2>> Woods { get; } = new List<List<float2>>();
         public float AreaSquareMeters { get; set; }
+
+        // Public playgrounds and dog parks mapped inside the park (or, for a standalone dog park, the park itself).
+        public List<OsmParkFeature> Features { get; } = new List<OsmParkFeature>();
+
+        // A public dog park outside any park, built as a small park of its own (gets no other park buildings).
+        public bool IsStandaloneFeature { get; set; }
+    }
+
+    internal enum OsmParkFeatureKind
+    {
+        Playground = 0,
+        DogPark = 1,
+    }
+
+    internal sealed class OsmParkFeature
+    {
+        public long Id { get; set; }
+        public OsmParkFeatureKind Kind { get; set; }
+        public bool FromPoint { get; set; }
+        public float2 Center { get; set; }
+        public float AreaSquareMeters { get; set; }
+
+        // Mapped outline, or a square of the typical size for a feature mapped as a point.
+        public List<float2> Ring { get; } = new List<float2>();
     }
 
     internal enum OsmParkingKind

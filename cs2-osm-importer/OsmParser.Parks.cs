@@ -137,8 +137,105 @@ namespace cs2_osm_importer
                 attached++;
             }
 
+            ReadParkFeatures(wayElements, nodes, document, Ring, Position);
+
             if (document.Parks.Count > 0)
                 Mod.log.Info($"Read {document.Parks.Count} OSM parks ({document.Parks.Count(p => p.AreaSquareMeters >= 40000f)} of 4 ha or more) with {attached} wooded areas inside them.");
+        }
+
+        // Typical sizes (Seattle medians) for a playground or dog park mapped as a point.
+        private const float PointPlaygroundSquareMeters = 280f;
+        private const float PointDogParkSquareMeters = 800f;
+
+        /// <summary>
+        /// Public leisure=playground / leisure=dog_park areas and points. Each is attached to the park it lies in;
+        /// a public dog park outside any park becomes a small park of its own. Private ones (access=private,
+        /// customers, students) and playgrounds outside parks (schools, apartment grounds: not imported yet) are left
+        /// out and counted.
+        /// </summary>
+        private static void ReadParkFeatures(XmlNodeList wayElements, Dictionary<long, GeoNode> nodes, OsmDocument document, Func<List<long>, List<float2>> ring, Func<long, float2?> position)
+        {
+            var features = new List<(OsmParkFeature Feature, string Name)>();
+            int privateOnes = 0;
+
+            bool Public(Dictionary<string, string> tags)
+            {
+                if (tags.TryGetValue("access", out var access) && (access == "private" || access == "customers" || access == "students" || access == "no"))
+                {
+                    privateOnes++;
+                    return false;
+                }
+                return true;
+            }
+
+            OsmParkFeatureKind? KindOf(Dictionary<string, string> tags)
+            {
+                if (!tags.TryGetValue("leisure", out var leisure))
+                    return null;
+                return leisure == "playground" ? OsmParkFeatureKind.Playground : leisure == "dog_park" ? OsmParkFeatureKind.DogPark : (OsmParkFeatureKind?)null;
+            }
+
+            foreach (XmlElement wayElement in wayElements)
+            {
+                var tags = ReadTags(wayElement);
+                var kind = KindOf(tags);
+                if (kind == null || !Public(tags))
+                    continue;
+                var ids = ReadNodeRefs(wayElement);
+                if (ids.Count < 4 || ids[0] != ids[ids.Count - 1])
+                    continue;
+                var r = ring(ids);
+                if (r == null)
+                    continue;
+                var f = new OsmParkFeature { Id = ReadLong(wayElement, "id"), Kind = kind.Value, Center = ParkingGeometry.Centroid(r), AreaSquareMeters = ParkingGeometry.SignedArea(r) };
+                f.Ring.AddRange(r);
+                features.Add((f, tags.TryGetValue("name", out var n) ? n : string.Empty));
+            }
+
+            foreach (var pair in nodes)
+            {
+                var kind = KindOf(pair.Value.Tags);
+                if (kind == null || !Public(pair.Value.Tags))
+                    continue;
+                var p = position(pair.Key);
+                if (!p.HasValue)
+                    continue;
+                // Skip a point that only repeats a mapped outline.
+                if (features.Any(x => x.Feature.Kind == kind.Value && ParkingGeometry.Contains(x.Feature.Ring, p.Value)))
+                    continue;
+                var area = kind == OsmParkFeatureKind.Playground ? PointPlaygroundSquareMeters : PointDogParkSquareMeters;
+                var h = math.sqrt(area) * 0.5f;
+                var f = new OsmParkFeature { Id = pair.Key, Kind = kind.Value, FromPoint = true, Center = p.Value, AreaSquareMeters = area };
+                f.Ring.AddRange(new[] { p.Value + new float2(-h, -h), p.Value + new float2(h, -h), p.Value + new float2(h, h), p.Value + new float2(-h, h) });
+                features.Add((f, pair.Value.Tags.TryGetValue("name", out var n) ? n : string.Empty));
+            }
+
+            int inParks = 0, standaloneDogParks = 0, playgroundsOutside = 0;
+            foreach (var (feature, name) in features)
+            {
+                var park = document.Parks.Where(x => ParkingGeometry.Contains(x.Ring, feature.Center)).OrderBy(x => x.AreaSquareMeters).FirstOrDefault();
+                if (park != null)
+                {
+                    park.Features.Add(feature);
+                    inParks++;
+                    continue;
+                }
+                if (feature.Kind == OsmParkFeatureKind.Playground)
+                {
+                    playgroundsOutside++;
+                    continue;
+                }
+                // A public dog park on its own: a small park of its own.
+                var own = new OsmParkArea { Id = feature.Id, Name = name, AreaSquareMeters = feature.AreaSquareMeters, IsStandaloneFeature = true };
+                own.Ring.AddRange(feature.Ring);
+                own.Features.Add(feature);
+                document.Parks.Add(own);
+                standaloneDogParks++;
+            }
+
+            if (features.Count + privateOnes > 0)
+                Mod.log.Info($"Read {features.Count} public playgrounds and dog parks: {inParks} inside parks, {standaloneDogParks} standalone dog parks (built as small parks), " +
+                             $"{playgroundsOutside} playgrounds outside parks (schools, apartment grounds: not imported yet); {privateOnes} private ones left out.");
         }
     }
 }
