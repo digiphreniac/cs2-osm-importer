@@ -117,6 +117,7 @@ namespace cs2_osm_importer
             ("trafficLights", "OsmImporter.Label.GenerateTrafficLights", "Traffic lights"),
             ("restrictedLanes", "OsmImporter.Label.GenerateRestrictedLanes", "Restricted bus lanes"),
             ("parkingLots", "OsmImporter.Label.GenerateParkingLots", "Parking lots"),
+            ("parks", "OsmImporter.Label.GenerateParks", "Parks"),
         };
 
         private string _lastRoadTypeCountsJson = string.Empty;
@@ -633,6 +634,7 @@ namespace cs2_osm_importer
                 GenerateTrafficLights = IsRoadUpgradeSelected("trafficLights"),
                 GenerateRestrictedLanes = IsRoadUpgradeSelected("restrictedLanes"),
                 GenerateParkingLots = IsRoadUpgradeSelected("parkingLots"),
+                GenerateParks = IsRoadUpgradeSelected("parks"),
             };
             foreach (var roadType in selectedTypes)
             {
@@ -775,6 +777,7 @@ namespace cs2_osm_importer
                 h = h * 31 + (s.DefaultGenerateTrafficLights ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateRestrictedLanes ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateParkingLots ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateParks ? 1 : 0);
                 return h;
             }
         }
@@ -866,6 +869,7 @@ namespace cs2_osm_importer
                 _roadUpgradeSelections["trafficLights"] = settings.DefaultGenerateTrafficLights;
                 _roadUpgradeSelections["restrictedLanes"] = settings.DefaultGenerateRestrictedLanes;
                 _roadUpgradeSelections["parkingLots"] = settings.DefaultGenerateParkingLots;
+                _roadUpgradeSelections["parks"] = settings.DefaultGenerateParks;
             }
             else
             {
