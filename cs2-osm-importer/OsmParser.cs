@@ -287,6 +287,7 @@ namespace cs2_osm_importer
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
             ReadParkingAreas(xml, wayElements, nodes, roadNodeIds, document, options);
+            ReadParks(xml, wayElements, nodes, roadNodeIds, document, options);
             MarkAislesInsideParkingLots(finalWays, document.ParkingAreas);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);

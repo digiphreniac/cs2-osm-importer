@@ -319,6 +319,8 @@ namespace cs2_osm_importer
             _pendingDeleteEntities.AddRange(FindRoundaboutObjectsOn(_pendingDeleteEntities));
             // Deleting a lot's surface also deletes the aisles and stalls it owns.
             _pendingDeleteEntities.AddRange(TakeGeneratedParkingLots());
+            // Park grass, park buildings (with their own paths and areas) and park trees.
+            _pendingDeleteEntities.AddRange(TakeGeneratedParks());
             _pendingDeleteIndex = 0;
             _deletedEdgeCount = 0;
             _deleteCompletionPending = false;
@@ -464,6 +466,7 @@ namespace cs2_osm_importer
                 _roadNamesApplied = false;
                 _roadServiceUpgradesApplied = false;
                 ResetParkingLotState();
+                ResetParkState();
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
@@ -783,6 +786,13 @@ namespace cs2_osm_importer
                     // Parking lots last: their entrances need the finished streets, and their own path edges must not
                     // be mistaken for roads by the name matching above.
                     if (ProcessParkingLotStep())
+                    {
+                        _applyWaitFrames = 0;
+                        return;
+                    }
+
+                    // Parks after parking lots: their buildings keep off the lots' aisles and garages.
+                    if (ProcessParkStep())
                     {
                         _applyWaitFrames = 0;
                         return;

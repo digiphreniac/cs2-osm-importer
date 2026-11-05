@@ -76,6 +76,10 @@ namespace cs2_osm_importer
         // inside them, which the generated aisles replace.
         public bool GenerateParkingLots { get; set; } = true;
 
+        // Build leisure=park areas: grass in the outline, vanilla park buildings along its streets (leisure,
+        // attractiveness, maintenance) and trees in the woods mapped inside it (land value).
+        public bool GenerateParks { get; set; } = true;
+
         // Road segments queued per frame within a generation phase. 0 (default) = all in one frame, which avoids
         // CS2 merging new points into nodes from earlier frames (see OsmImportSystem.SegmentsPerFrameLimit).
         // Only lower it to spread a very large import over frames, at the cost of broken chains at batch boundaries.
@@ -110,6 +114,22 @@ namespace cs2_osm_importer
 
         // amenity=parking areas (closed ways and multipolygon outer rings), projected like the roads.
         public List<OsmParkingArea> ParkingAreas { get; } = new List<OsmParkingArea>();
+
+        // leisure=park outlines with the woods mapped inside them.
+        public List<OsmParkArea> Parks { get; } = new List<OsmParkArea>();
+    }
+
+    internal sealed class OsmParkArea
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+
+        // Outline in world XZ, counter-clockwise, without a repeated closing point. Holes are ignored.
+        public List<float2> Ring { get; } = new List<float2>();
+
+        // natural=wood / landuse=forest outlines lying inside the park.
+        public List<List<float2>> Woods { get; } = new List<List<float2>>();
+        public float AreaSquareMeters { get; set; }
     }
 
     internal enum OsmParkingKind

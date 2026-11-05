@@ -107,6 +107,8 @@ namespace cs2_osm_importer
                                 QueueParkingStall(_pendingStalls[_pendingStallIndex]);
                             return true;
                         }
+                        if (_parkingWaitFrames % 60 == 1)
+                            LogPendingDefinitions("parking", _parkingDefinitions, _parkingWaitFrames);
                         if (CountPendingParkingDefinitions() > 0 && _parkingWaitFrames < MaxApplyWaitFrames)
                             return true;
                         Mod.log.Info($"Parking definitions applied after {_parkingWaitFrames} frames ({CountPendingParkingDefinitions()} still pending).");
@@ -323,6 +325,21 @@ namespace cs2_osm_importer
                         count++;
                     }
             return count;
+        }
+
+        // DIAG: which definition kinds are still waiting for the game.
+        private void LogPendingDefinitions(string label, List<Entity> definitions, int frames)
+        {
+            int net = 0, obj = 0, area = 0, owned = 0;
+            foreach (var e in definitions)
+            {
+                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<CreationDefinition>(e)) continue;
+                if (EntityManager.HasComponent<NetCourse>(e)) net++;
+                else if (EntityManager.HasComponent<Game.Tools.ObjectDefinition>(e)) obj++;
+                else area++;
+                if (EntityManager.HasComponent<OwnerDefinition>(e)) owned++;
+            }
+            Mod.log.Info($"DIAG {label} pending after {frames} frames: {net} courses, {obj} objects, {area} areas ({owned} with an owner definition).");
         }
 
         private float3 Lift(float2 p) => new float3(p.x, SampleTerrainHeight(new float3(p.x, 0f, p.y)), p.y);
