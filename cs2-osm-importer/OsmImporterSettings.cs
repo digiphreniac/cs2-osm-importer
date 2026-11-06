@@ -151,6 +151,9 @@ namespace cs2_osm_importer
         public bool DefaultImportSteps { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
+        public bool DefaultImportPath { get; set; } = true;
+
+        [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
         public bool DefaultImportBridleway { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
@@ -311,6 +314,7 @@ namespace cs2_osm_importer
             DefaultImportTertiaryLink = true;
             DefaultImportFootway = true;
             DefaultImportSteps = true;
+            DefaultImportPath = true;
             DefaultImportBridleway = true;
             DefaultImportMonorail = true;
             DefaultImportRail = true;

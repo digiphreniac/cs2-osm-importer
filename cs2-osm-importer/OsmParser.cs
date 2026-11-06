@@ -462,6 +462,8 @@ namespace cs2_osm_importer
         {
             way = new OsmWay { Id = ReadLong(wayElement, "id") };
             var isArea = false;
+            var pathSurface = string.Empty;
+            var pathBicycle = string.Empty;
             var hasLayer = false;
             var layer = 0;
             var isBridge = false;
@@ -507,6 +509,10 @@ namespace cs2_osm_importer
                         way.Ref = value;
                     else if (key == "service" && value == "parking_aisle")
                         way.IsParkingAisle = true;
+                    else if (key == "surface")
+                        pathSurface = value;
+                    else if (key == "bicycle")
+                        pathBicycle = value;
                     else if (key == "lanes" && TryReadLaneCount(value, out var parsedLaneCount))
                     {
                         way.Lanes = parsedLaneCount;
@@ -600,6 +606,11 @@ namespace cs2_osm_importer
                      !string.Equals(way.Highway, wayRailway, StringComparison.OrdinalIgnoreCase) &&
                      IsElevatedRailType(wayRailway))
                 way.Highway = wayRailway;
+
+            // A paved path designated for bicycles is a cycleway in OSM terms; other paths (trails, unpaved or
+            // foot paths) stay "path" and use their own prefab rules.
+            if (way.Highway == "path" && pathBicycle == "designated" && IsPavedSurface(pathSurface))
+                way.Highway = "cycleway";
 
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
@@ -1026,6 +1037,7 @@ namespace cs2_osm_importer
                 case "bridleway":
                 case "footway":
                 case "steps":
+                case "path":
                 case "pedestrian":
                     return false;
                 default:
@@ -3110,6 +3122,7 @@ namespace cs2_osm_importer
                 case "tertiary_link":
                 case "footway":
                 case "steps":
+                case "path":
                 case "bridleway":
                 case "monorail":
                 case "rail":
@@ -3374,6 +3387,10 @@ namespace cs2_osm_importer
         }
 
         // bridge=yes/viaduct/boardwalk/movable/cantilever/trestle/... all mean a bridge (IsTruthy only accepted yes/true/1).
+        private static bool IsPavedSurface(string surface) =>
+            string.IsNullOrEmpty(surface) || surface == "asphalt" || surface == "paved" || surface == "concrete" ||
+            surface == "paving_stones" || surface == "concrete:plates" || surface == "sett" || surface == "bricks";
+
         private static bool IsBridgeValue(string value) =>
             !string.IsNullOrWhiteSpace(value) && !IsFalsey(value);
 

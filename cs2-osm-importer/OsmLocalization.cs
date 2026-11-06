@@ -80,6 +80,8 @@ namespace cs2_osm_importer
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportFootway]", "Import: footway" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportFootway]", "Default state for importing footways when loading OSM data." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportSteps]", "Import: steps" },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportPath]", "Import: paths" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportPath]", "Default state for importing paths (highway=path: trails and multi-use paths) when loading OSM data." },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportSteps]", "Default state for importing steps (outdoor stairs) when loading OSM data." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportBridleway]", "Import: bridleway" },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultImportBridleway]", "Default state for importing bridleways when loading OSM data." },
