@@ -59,6 +59,13 @@ Choose which loaded road types to generate, then click **Generate Roads**.
 - **Lakes take a few minutes to fill.** The water rises slowly while the roads are built (filling a deep basin all at
   once sloshes over low spots of the shore), and the import finishes once the lakes are full. Deleting the generated
   network removes the water sources; the water already there drains away on its own.
+- **Piers are walkways, and a few marina joints stay open.** `man_made=pier` lines become footways on a deck 1 m above
+  the water. Pier areas get a walkway down their middle (their skeleton); shapes it cannot read are skipped, with a
+  log line. Pier ends near a path or another pier are joined to it. A pier with no path within 35 m (a swimming raft
+  out in the lake) is left out. A dock mapped twice (a line and an area, or two lines within 3.5 m) is built once. On
+  the Lake Union test area (about 400 piers), a few joints near piers still do not connect: two pier ends stop about
+  3 m short of a bike path, and a few short dead-end stubs sit where an added shore connector meets a sloped bank.
+  Where the lake has no water (see above), the piers stand over a dry bed.
 
 ## How it works (for developers)
 

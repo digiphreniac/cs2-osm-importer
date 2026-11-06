@@ -108,18 +108,20 @@ namespace cs2_osm_importer
             return false;
         }
 
-        private const float ShoreWayAboveWater = 1f;
-        private const float ShoreWayReach = 15f;
+        private const float PierDeckAboveWater = 1f;
+        private const float PierLakeReach = 50f;
 
         /// <summary>
-        /// The heightmap's lake bed can reach a few meters past the mapped shore, and the paths along the shore then
-        /// sit on its slope, under the water (seen on Green Lake's west shore: a shore footway at 45-48 m, the lake at
-        /// 49.5 m). Every way point in a lake or within ShoreWayReach of its shore is kept at least ShoreWayAboveWater
-        /// above the lake's level.
+        /// Pier decks: 1 m above the water they stand in (the level of the lake around them, else the sea level);
+        /// where a pier (or its added shore connector) is over land, it follows the ground.
         /// </summary>
-        private void RaiseShoreWays()
+        private void SetPierDeckHeights()
         {
-            if (_document == null || !(_activeGenerateOptions?.GenerateLakes ?? false))
+            if (_document == null)
+                return;
+            var piers = _document.Ways.Where(w => w.IsPier && w.Points.Count >= 2).ToList();
+            var fillLakes = _activeGenerateOptions?.GenerateLakes ?? false;
+            if (piers.Count == 0 && !fillLakes)
                 return;
             CacheTerrainHeightData();
             var levels = new List<(OsmLake Lake, float Level)>();
@@ -128,12 +130,103 @@ namespace cs2_osm_importer
                 if (lake.AreaSquareMeters >= LakeMinSquareMeters && TryLakeLevel(lake, out var level, out _))
                     levels.Add((lake, level));
             }
+            var sea = World.GetExistingSystemManaged<WaterSystem>()?.SeaLevel ?? 0f;
+            int onLakes = 0, onSea = 0;
+            // Heights of the other ways' points: where a pier joins a path or street it takes that point's height
+            // (a fresh terrain sample differs from the parser's smoothed profile by a few decimeters, and CS2 then
+            // builds two unconnected nodes at the joint).
+            var otherHeights = new Dictionary<(int, int), float>();
+            foreach (var way in _document.Ways)
+            {
+                if (way.IsPier)
+                    continue;
+                foreach (var p in way.Points)
+                    otherHeights[PointKey(p)] = p.y;
+            }
+            foreach (var pier in piers)
+            {
+                float? water = null;
+                var bestDistance = PierLakeReach;
+                foreach (var (lake, level) in levels)
+                {
+                    foreach (var p in pier.Points)
+                    {
+                        var d = ParkingGeometry.Contains(lake.Ring, p.xz) ? 0f : ParkingGeometry.DistanceToRing(lake.Ring, p.xz);
+                        if (d < bestDistance)
+                        {
+                            bestDistance = d;
+                            water = level;
+                        }
+                    }
+                }
+                if (water.HasValue)
+                    onLakes++;
+                else
+                {
+                    water = sea;
+                    onSea++;
+                }
+
+                var terrain = new float[pier.Points.Count];
+                for (var i = 0; i < pier.Points.Count; i++)
+                    terrain[i] = SampleTerrainHeight(new float3(pier.Points[i].x, 0f, pier.Points[i].z));
+                // Over the water the deck, on land the ground: the same rule on every pier way, so the points they
+                // share (and the shore paths they join) always get the same height.
+                var deck = water.Value + PierDeckAboveWater;
+                for (var i = 0; i < pier.Points.Count; i++)
+                {
+                    var p = pier.Points[i];
+                    var ground = otherHeights.TryGetValue(PointKey(p), out var shared) ? shared : terrain[i];
+                    p.y = math.max(ground, deck);
+                    pier.Points[i] = p;
+                }
+            }
+            Mod.log.Info($"Pier decks: {onLakes} over lakes, {onSea} at the sea level {sea:F1} m.");
+
+            // And a path point a pier deck joins above its own height comes up to the deck.
+            var pierHeights = new Dictionary<(int, int), float>();
+            foreach (var pier in piers)
+                foreach (var p in pier.Points)
+                    pierHeights[PointKey(p)] = p.y;
+            foreach (var way in _document.Ways)
+            {
+                if (way.IsPier)
+                    continue;
+                for (var i = 0; i < way.Points.Count; i++)
+                {
+                    var p = way.Points[i];
+                    if (pierHeights.TryGetValue(PointKey(p), out var deckY) && deckY > p.y)
+                    {
+                        p.y = deckY;
+                        way.Points[i] = p;
+                    }
+                }
+            }
+
+            if (fillLakes)
+                RaiseShoreWays(levels);
+        }
+
+        private static (int, int) PointKey(float3 p) => ((int)math.round(p.x * 20f), (int)math.round(p.z * 20f));
+
+        private const float ShoreWayReach = 15f;
+
+        /// <summary>
+        /// The heightmap's lake bed can reach a few meters past the mapped shore, and the paths along the shore then
+        /// sit on its slope, under the water (seen on Green Lake's west shore: a shore footway at 45-48 m, the lake at
+        /// 49.5 m). Every way point in a lake or within ShoreWayReach of its shore is kept at least as high as a pier
+        /// deck, the same rule the piers use, so the points piers and shore paths share stay at one height.
+        /// </summary>
+        private void RaiseShoreWays(List<(OsmLake Lake, float Level)> levels)
+        {
             if (levels.Count == 0)
                 return;
             var boxes = levels.Select(l => ParkingGeometry.Bounds(l.Lake.Ring) + new float4(-ShoreWayReach, -ShoreWayReach, ShoreWayReach, ShoreWayReach)).ToList();
             int raisedWays = 0, raisedPoints = 0;
             foreach (var way in _document.Ways)
             {
+                if (way.IsPier)
+                    continue;
                 var raised = false;
                 for (var i = 0; i < way.Points.Count; i++)
                 {
@@ -143,7 +236,7 @@ namespace cs2_osm_importer
                         var b = boxes[k];
                         if (p.x < b.x || p.z < b.y || p.x > b.z || p.z > b.w)
                             continue;
-                        var minY = levels[k].Level + ShoreWayAboveWater;
+                        var minY = levels[k].Level + PierDeckAboveWater;
                         if (p.y >= minY)
                             continue;
                         var ring = levels[k].Lake.Ring;

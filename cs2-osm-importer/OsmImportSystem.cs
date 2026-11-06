@@ -474,7 +474,7 @@ namespace cs2_osm_importer
                 ResetLakeState();
                 // Lakes start filling now and rise slowly while the roads are built.
                 ProcessLakeStep();
-                RaiseShoreWays();
+                SetPierDeckHeights();
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
@@ -518,7 +518,8 @@ namespace cs2_osm_importer
                         while (_pointIndex < way.Points.Count - 1)
                         {
                             var mergeEnd = _pointIndex + 1;
-                            if (way.UsesStructuralElevation)
+                            // Piers keep every point: finger docks join the main dock at points along a straight run.
+                            if (way.UsesStructuralElevation && !way.IsPier)
                             {
                                 while (mergeEnd + 1 < way.Points.Count &&
                                        PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))
@@ -641,7 +642,8 @@ namespace cs2_osm_importer
                     while (_pointIndex < way.Points.Count - 1)
                     {
                         var mergeEnd = _pointIndex + 1;
-                        if (way.UsesStructuralElevation)
+                        // Piers keep every point: finger docks join the main dock at points along a straight run.
+                        if (way.UsesStructuralElevation && !way.IsPier)
                         {
                             while (mergeEnd + 1 < way.Points.Count &&
                                    PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))

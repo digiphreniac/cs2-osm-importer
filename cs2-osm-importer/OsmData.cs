@@ -223,6 +223,8 @@ namespace cs2_osm_importer
         public bool HasExplicitLaneCount { get; set; }
         public bool UsesStructuralElevation { get; set; }
         public bool IsBridge { get; set; }
+        // man_made=pier: a flat deck over the water; its height is set from the water level at generation.
+        public bool IsPier { get; set; }
         public bool IsTunnel { get; set; }
         public bool IsOneWay { get; set; }
         public int OneWayDirection { get; set; }

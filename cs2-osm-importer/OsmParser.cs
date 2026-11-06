@@ -201,6 +201,9 @@ namespace cs2_osm_importer
                 }
             }
 
+            AddPierWays(xml, wayElements, nodes, supportedWays, roadNodeIds,
+                !options.UseImportHighwayTypesFilter || (options.ImportHighwayTypes != null && options.ImportHighwayTypes.Contains("footway")));
+
             if (roadNodeIds.Count == 0)
                 return document;
 
@@ -467,6 +470,7 @@ namespace cs2_osm_importer
             var hasLayer = false;
             var layer = 0;
             var isBridge = false;
+            var isPier = false;
             var isTunnel = false;
             var oneWayDirection = 0;
             var isCovered = false;
@@ -532,6 +536,8 @@ namespace cs2_osm_importer
                     }
                     else if (key == "bridge")
                         isBridge = IsBridgeValue(value);
+                    else if (key == "man_made" && value == "pier")
+                        isPier = true;
                     else if (key == "tunnel")
                         isTunnel = IsTunnelValue(value);
                     else if (key == "oneway")
@@ -641,6 +647,13 @@ namespace cs2_osm_importer
                 isCutting);
             way.UsesStructuralElevation = (isBridge || isTunnel || isEmbankment || isCutting) &&
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
+            // A pier is a flat deck: no bridge offset, one height for the whole way (set at generation).
+            way.IsPier = isPier;
+            if (isPier)
+            {
+                way.UsesStructuralElevation = true;
+                way.BaseElevationOffsetMeters = 0f;
+            }
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
             // Only junction=roundabout/circular. A closed loop street (around a block, a cul-de-sac loop) is an ordinary road.
@@ -1801,6 +1814,7 @@ namespace cs2_osm_importer
                 HasExplicitLaneCount = way.HasExplicitLaneCount,
                 UsesStructuralElevation = way.UsesStructuralElevation,
                 IsBridge = way.IsBridge,
+                IsPier = way.IsPier,
                 IsTunnel = way.IsTunnel,
                 IsOneWay = way.IsOneWay,
                 OneWayDirection = way.OneWayDirection,
@@ -1866,6 +1880,7 @@ namespace cs2_osm_importer
                 HasExplicitLaneCount = ways[0].HasExplicitLaneCount,
                 UsesStructuralElevation = ways[0].UsesStructuralElevation,
                 IsBridge = ways[0].IsBridge,
+                IsPier = ways[0].IsPier,
                 IsTunnel = ways[0].IsTunnel,
                 IsOneWay = ways[0].IsOneWay,
                 OneWayDirection = ways[0].OneWayDirection,
