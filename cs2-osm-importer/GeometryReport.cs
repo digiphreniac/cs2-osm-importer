@@ -35,59 +35,27 @@ namespace cs2_osm_importer
         private const float ReportSearchRadiusMeters = 50f;
         private const float ReportCoverageToleranceMeters = 2f;
         private const float ReportIndexCellMeters = 16f;
-        private const int ReportAutoDelayFrames = 120;
-        private const int ReportAutoMaxWaitFrames = 3600;
         private const int ReportTopCount = 25;
         private static readonly float[] ReportHistogramBounds = { 0.1f, 0.25f, 0.5f, 1f, 2f, 5f };
 
-        private int _autoReportFrames = -1;
-        private int _autoReportWaitedFrames;
 
         internal string LastGeometryReportPath { get; private set; } = string.Empty;
 
         internal static string GeometryReportDirectory =>
             Path.Combine(UnityEngine.Application.persistentDataPath, "ModsData", Mod.Id, "geometry-reports");
 
-        private void ScheduleAutoGeometryReport()
-        {
-            if (Mod.Settings?.DeveloperMode != true)
-                return;
-
-            _autoReportFrames = ReportAutoDelayFrames;
-            _autoReportWaitedFrames = 0;
-        }
-
+        /// <summary>
+        /// Writes the report when requested (settings button, or the agent bridge's geometry_report command). It no
+        /// longer runs by itself after every generation in Developer Mode: it runs in a single frame and froze the game
+        /// for ~3 minutes after a full-Seattle import, blocking everything queued behind it.
+        /// </summary>
         private void UpdateGeometryReportRequests()
         {
-            if (IsImporting)
+            if (IsImporting || !GeometryReportRequested)
                 return;
 
-            if (GeometryReportRequested)
-            {
-                GeometryReportRequested = false;
-                _autoReportFrames = -1;
-                WriteGeometryReport("manual");
-                return;
-            }
-
-            if (_autoReportFrames < 0)
-                return;
-
-            if (_autoReportFrames > 0)
-            {
-                _autoReportFrames--;
-                return;
-            }
-
-            // Let the game finish consuming definitions before measuring what it built.
-            if (CountPendingDefinitions() > 0 && _autoReportWaitedFrames < ReportAutoMaxWaitFrames)
-            {
-                _autoReportWaitedFrames++;
-                return;
-            }
-
-            _autoReportFrames = -1;
-            WriteGeometryReport("auto-after-generate");
+            GeometryReportRequested = false;
+            WriteGeometryReport("manual");
         }
 
         private sealed class EdgeRecord

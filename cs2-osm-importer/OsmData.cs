@@ -45,6 +45,13 @@ namespace cs2_osm_importer
     {
         public string Path { get; set; } = string.Empty;
         public float SimplifyToleranceMeters { get; set; } = 1f;
+        /// <summary>
+        /// Drops road points that lie on the straight line between their neighbours, within these tolerances: in plan
+        /// (map position, so straight roads stay exactly on OSM) and in height (how closely the road follows the ground
+        /// between its points). Junctions, shared points and node features are always kept. 0 turns it off.
+        /// </summary>
+        public float SimplifyPlanToleranceMeters { get; set; } = 0.05f;
+        public float SimplifyHeightToleranceMeters { get; set; } = 0.5f;
         public float CurveToleranceMeters { get; set; } = 0.5f;
         public float ScaleFactor { get; set; } = 1f;
         public float ElevationMeters { get; set; } = 0.2f;

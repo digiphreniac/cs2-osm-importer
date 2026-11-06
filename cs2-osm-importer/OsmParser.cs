@@ -142,7 +142,10 @@ namespace cs2_osm_importer
             public double Lon;
             public double X;
             public double Y;
-            public Dictionary<string, string> Tags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // Most nodes have no tags: they share this empty, never-written dictionary instead of one each.
+            public Dictionary<string, string> Tags = NoTags;
+
+            public static readonly Dictionary<string, string> NoTags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         public static OsmDocument Load(
@@ -159,11 +162,11 @@ namespace cs2_osm_importer
                 throw new FileNotFoundException("OSM file was not found.", options.Path);
 
             var priorityRoadNames = ReadPriorityRoadNames(options.PriorityRoadNamesPath);
+            var timer = new ParseTimer();
 
             var xml = new XmlDocument { XmlResolver = null };
-            xml.Load(options.Path);
-
-            var nodes = ReadNodes(xml);
+            var nodes = ReadOsmFile(options.Path, xml);
+            timer.Mark("read");
             if (nodes.Count == 0)
                 throw new InvalidDataException("The OSM file does not contain any nodes.");
 
@@ -201,8 +204,10 @@ namespace cs2_osm_importer
                 }
             }
 
+            timer.Mark("wayScan");
             AddPierWays(xml, wayElements, nodes, supportedWays, roadNodeIds,
                 !options.UseImportHighwayTypesFilter || (options.ImportHighwayTypes != null && options.ImportHighwayTypes.Contains("footway")));
+            timer.Mark("piers");
 
             if (roadNodeIds.Count == 0)
                 return document;
@@ -255,7 +260,9 @@ namespace cs2_osm_importer
                 document.CenterLon = center.Lon;
             }
 
+            timer.Mark("project");
             MergeCloseRoadNodes(nodes, supportedWays, roadNodeIds, MinSegmentLengthMeters / Math.Max(1e-6f, options.ScaleFactor));
+            timer.Mark("mergeNodes");
 
             foreach (var nodeId in roadNodeIds)
             {
@@ -268,6 +275,7 @@ namespace cs2_osm_importer
             }
 
             turnRestrictionsByWayId = ReadTurnRestrictions(xml, nodes, options, sampleHeight);
+            timer.Mark("turnRestrictions");
 
             var parsedWays = new List<OsmWay>();
             foreach (var wayElement in supportedWays)
@@ -275,6 +283,7 @@ namespace cs2_osm_importer
                 if (TryReadRoadWay(wayElement, nodes, options, sampleHeight, worldOffset, turnRestrictionsByWayId, out var way))
                     parsedWays.Add(way);
             }
+            timer.Mark("readWays");
 
             parsedWays = AttachSidewalkWays(parsedWays, out var attachedSidewalkCount);
             if (attachedSidewalkCount > 0)
@@ -284,15 +293,27 @@ namespace cs2_osm_importer
             if (mergedWayCount > 0)
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
+            timer.Mark("sidewalksAndChains");
             HarmonizeGroupElevations(finalWays);
+            timer.Mark("harmonize");
             ConvertRoundabouts(finalWays, sampleHeight);
+            timer.Mark("roundabouts");
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
+            timer.Mark("pedestrianDetails");
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
+            timer.Mark("sharedPoints");
             ReadParkingAreas(xml, wayElements, nodes, roadNodeIds, document, options);
+            timer.Mark("parking");
             ReadParks(xml, wayElements, nodes, roadNodeIds, document, options);
+            timer.Mark("parks");
             MarkAislesInsideParkingLots(finalWays, document.ParkingAreas);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
+            timer.Mark("aislesAndPriority");
+            // In game only (terrain sampled): the 15 m terrain split is what adds most of the removable points.
+            if (sampleHeight != null)
+                SimplifyRoadPoints(finalWays, options.SimplifyPlanToleranceMeters, options.SimplifyHeightToleranceMeters);
+            timer.Mark("simplify");
             document.Ways.AddRange(finalWays);
 
             if (document.Ways.Count > Math.Max(1, options.MaxWays))
@@ -302,33 +323,227 @@ namespace cs2_osm_importer
                 IncludeBounds(document, way);
 
             document.InferredLaneCount = NormalizeContiguousLaneCounts(document.Ways);
+            timer.Mark("lanes");
+            Mod.log.Info(timer.Summary());
             return document;
         }
 
-        private static Dictionary<long, GeoNode> ReadNodes(XmlDocument xml)
+        /// <summary>Wall time and managed heap after each parse phase, logged once per load to find slow phases on large imports.</summary>
+        private sealed class ParseTimer
+        {
+            private readonly System.Diagnostics.Stopwatch _total = System.Diagnostics.Stopwatch.StartNew();
+            private readonly System.Text.StringBuilder _phases = new System.Text.StringBuilder();
+            private double _last;
+
+            public void Mark(string phase)
+            {
+                var now = _total.Elapsed.TotalSeconds;
+                _phases.Append($" {phase}={now - _last:F1}s");
+                _last = now;
+            }
+
+            public string Summary()
+            {
+                var heapMb = GC.GetTotalMemory(false) / (1024 * 1024);
+                return $"OSM parse timing: total={_total.Elapsed.TotalSeconds:F1}s (managed heap {heapMb} MB at end):{_phases}";
+            }
+        }
+
+        /// <summary>
+        /// Streams the OSM file. Nodes, the bulk of any OSM file, go straight into GeoNodes and never become XML
+        /// elements: as a full XmlDocument, full Seattle (1.7 million nodes) took 4.5 GB and most of the parse time.
+        /// Everything else (bounds, ways, relations) goes into <paramref name="xml"/> under an osm root, in file
+        /// order, for the passes that query it.
+        /// </summary>
+        /// <summary>
+        /// Way tag keys some pass selects ways by (roads and rails, piers, parking, parks, woods, water). Other keys
+        /// (building, address, name...) are only read on ways that have one of these as well.
+        /// </summary>
+        private static readonly HashSet<string> UsedWayKeys = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "highway", "railway", "leisure", "natural", "landuse", "man_made", "water", "amenity", "parking",
+        };
+
+        /// <summary>A way read without building its XML element yet: attributes and child elements, in file order.</summary>
+        private sealed class PendingWay
+        {
+            public List<(string Name, string Value)> Attributes;
+            public List<(string Name, List<(string Name, string Value)> Attributes)> Children;
+            public long Id;
+        }
+
+        private static List<(string Name, string Value)> ReadAttributes(XmlReader reader)
+        {
+            var list = new List<(string, string)>(reader.AttributeCount);
+            if (reader.MoveToFirstAttribute())
+            {
+                do
+                    list.Add((reader.Name, reader.Value));
+                while (reader.MoveToNextAttribute());
+                reader.MoveToElement();
+            }
+            return list;
+        }
+
+        private static XmlElement BuildElement(XmlDocument xml, string name, List<(string Name, string Value)> attributes)
+        {
+            var element = xml.CreateElement(name);
+            foreach (var (n, v) in attributes)
+                element.SetAttribute(n, v);
+            return element;
+        }
+
+        /// <summary>
+        /// Reads one way (the reader on its start tag; leaves it past the end tag). A way with a used key is built as an
+        /// XML element at once; any other way is returned as a PendingWay.
+        /// </summary>
+        private static object ReadWay(XmlReader reader, XmlDocument xml, int depth)
+        {
+            var way = new PendingWay
+            {
+                Attributes = ReadAttributes(reader),
+                Children = new List<(string, List<(string, string)>)>(),
+            };
+            long.TryParse(reader.GetAttribute("id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out way.Id);
+            var used = false;
+            if (reader.IsEmptyElement)
+            {
+                reader.Read();
+            }
+            else
+            {
+                reader.Read();
+                while (!reader.EOF && reader.Depth > depth)
+                {
+                    if (reader.NodeType == XmlNodeType.Element && reader.Depth == depth + 1)
+                    {
+                        var name = reader.Name;
+                        var attributes = ReadAttributes(reader);
+                        way.Children.Add((name, attributes));
+                        if (!used && name == "tag")
+                        {
+                            foreach (var (n, v) in attributes)
+                            {
+                                if (n == "k" && UsedWayKeys.Contains(v))
+                                    used = true;
+                            }
+                        }
+                    }
+                    reader.Read();
+                }
+                // Past </way>.
+                if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == depth)
+                    reader.Read();
+            }
+            return used ? BuildWay(xml, way) : (object)way;
+        }
+
+        private static XmlElement BuildWay(XmlDocument xml, PendingWay way)
+        {
+            var element = BuildElement(xml, "way", way.Attributes);
+            foreach (var (name, attributes) in way.Children)
+                element.AppendChild(BuildElement(xml, name, attributes));
+            return element;
+        }
+
+        private static Dictionary<long, GeoNode> ReadOsmFile(string path, XmlDocument xml)
         {
             var nodes = new Dictionary<long, GeoNode>();
-            var nodeElements = xml.SelectNodes("/osm/node");
-            if (nodeElements == null)
-                return nodes;
+            var root = xml.CreateElement("osm");
+            xml.AppendChild(root);
+            // Top-level elements other than nodes, in file order: built elements, or ways without a used key, which
+            // are only built if a relation lists them (multipolygon outlines are usually untagged ways). Buildings,
+            // the bulk of a city's ways, never become XML elements.
+            var ordered = new List<object>();
+            var relationWayIds = new HashSet<long>();
 
-            foreach (XmlElement nodeElement in nodeElements)
+            var settings = new XmlReaderSettings
             {
-                var id = ReadLong(nodeElement, "id");
-                var node = new GeoNode
+                DtdProcessing = DtdProcessing.Ignore,
+                XmlResolver = null,
+                IgnoreWhitespace = true,
+                IgnoreComments = true,
+                IgnoreProcessingInstructions = true,
+            };
+            using (var reader = XmlReader.Create(path, settings))
+            {
+                if (reader.MoveToContent() != XmlNodeType.Element || reader.IsEmptyElement)
+                    return nodes;
+                var childDepth = reader.Depth + 1;
+                reader.Read();
+                while (!reader.EOF)
                 {
-                    Lat = ReadDouble(nodeElement, "lat"),
-                    Lon = ReadDouble(nodeElement, "lon")
-                };
+                    if (reader.NodeType != XmlNodeType.Element || reader.Depth != childDepth)
+                    {
+                        reader.Read();
+                        continue;
+                    }
 
-                var tags = nodeElement.SelectNodes("tag");
-                if (tags != null)
-                {
-                    foreach (XmlElement tag in tags)
-                        node.Tags[tag.GetAttribute("k")] = tag.GetAttribute("v");
+                    if (reader.Name == "way")
+                    {
+                        ordered.Add(ReadWay(reader, xml, childDepth));
+                        continue;
+                    }
+
+                    if (reader.Name != "node")
+                    {
+                        // Moves the reader past the element.
+                        var element = xml.ReadNode(reader);
+                        if (element is XmlElement relation && relation.Name == "relation")
+                        {
+                            foreach (XmlNode child in relation.ChildNodes)
+                            {
+                                if (child is XmlElement member && member.Name == "member" && member.GetAttribute("type") == "way" &&
+                                    long.TryParse(member.GetAttribute("ref"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var wayId))
+                                    relationWayIds.Add(wayId);
+                            }
+                        }
+                        ordered.Add(element);
+                        continue;
+                    }
+
+                    var id = long.Parse(reader.GetAttribute("id"), CultureInfo.InvariantCulture);
+                    var node = new GeoNode
+                    {
+                        Lat = double.Parse(reader.GetAttribute("lat"), CultureInfo.InvariantCulture),
+                        Lon = double.Parse(reader.GetAttribute("lon"), CultureInfo.InvariantCulture),
+                    };
+                    if (reader.IsEmptyElement)
+                    {
+                        reader.Read();
+                    }
+                    else
+                    {
+                        reader.Read();
+                        while (!reader.EOF && reader.Depth > childDepth)
+                        {
+                            if (reader.NodeType == XmlNodeType.Element && reader.Name == "tag")
+                            {
+                                if (ReferenceEquals(node.Tags, GeoNode.NoTags))
+                                    node.Tags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                                node.Tags[reader.GetAttribute("k") ?? string.Empty] = reader.GetAttribute("v") ?? string.Empty;
+                            }
+                            reader.Read();
+                        }
+                        // Past </node>.
+                        if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == childDepth)
+                            reader.Read();
+                    }
+                    nodes[id] = node;
                 }
+            }
 
-                nodes[id] = node;
+            foreach (var item in ordered)
+            {
+                if (item is PendingWay pending)
+                {
+                    if (relationWayIds.Contains(pending.Id))
+                        root.AppendChild(BuildWay(xml, pending));
+                }
+                else if (item is XmlNode element)
+                {
+                    root.AppendChild(element);
+                }
             }
 
             return nodes;
@@ -662,14 +877,6 @@ namespace cs2_osm_importer
             way.IsOneWay = oneWayDirection != 0 || way.IsRoundabout;
             if (way.IsRoundabout && way.OneWayDirection == 0)
                 way.OneWayDirection = 1;
-
-            if (way.Highway is "monorail" or "light_rail" or "subway" || wayRailway is "monorail" or "light_rail" or "subway")
-            {
-                Mod.log.Info(
-                    $"OSM WAY: Highway=\"{way.Highway}\" Railway=\"{wayRailway}\" " +
-                    $"Offset={way.BaseElevationOffsetMeters:F1}m Structural={way.UsesStructuralElevation} " +
-                    $"Layer={layer}(hasLayer={hasLayer}) Bridge={isBridge} Tunnel={isTunnel}");
-            }
 
             way.InclineDirection = inclineDirection;
             way.InclinePercent = inclinePercent;
@@ -2073,6 +2280,20 @@ namespace cs2_osm_importer
                 }
             }
 
+            // Ways by node, so each ring only visits the ways that touch it (a scan of every way per ring took ~19 s
+            // on full Seattle). They are visited in list order, as the full scan did.
+            var ringWayIndexByNode = new Dictionary<long, List<int>>();
+            for (var i = 0; i < ways.Count; i++)
+            {
+                foreach (var id in ways[i].NodeIds)
+                {
+                    if (!ringWayIndexByNode.TryGetValue(id, out var list))
+                        ringWayIndexByNode[id] = list = new List<int>();
+                    if (list.Count == 0 || list[list.Count - 1] != i)
+                        list.Add(i);
+                }
+            }
+
             var converted = 0;
             var asRingRoads = 0;
             var extended = 0;
@@ -2110,7 +2331,14 @@ namespace cs2_osm_importer
                 }
 
                 // Every way that ends on the ring now continues to the centre (the exact same float3, so CS2 joins them).
-                foreach (var w in ways)
+                // Only ways with a node on the ring can end on it or pass through it.
+                var touching = new SortedSet<int>();
+                foreach (var id in ringNodes)
+                {
+                    if (ringWayIndexByNode.TryGetValue(id, out var list))
+                        touching.UnionWith(list);
+                }
+                foreach (var w in touching.Select(i => ways[i]))
                 {
                     if (w.IsRoundabout || w.NodeIds.Count < 2 || w.Points.Count < 1)
                         continue;
@@ -2211,6 +2439,11 @@ namespace cs2_osm_importer
                 return ways;
             var detailSet = new HashSet<OsmWay>(details);
             var roads = ways.Where(IsVehicleRoad).ToList();
+            // IsVehicleRoad lower-cases the highway type on every call; this function asks millions of times on a
+            // city-sized import (nothing here changes a way's type), so it asks the set instead.
+            var roadSet = new HashSet<OsmWay>(roads);
+            // Points inserted into a road lie on one of its segments, inside that segment's box.
+            var roadIndex = new PolylineIndex(roads.Count, r => roads[r].Points.Count, (r, i) => roads[r].Points[i].xz, 0.01f);
 
             var waysByNode = new Dictionary<long, List<OsmWay>>();
             foreach (var w in ways)
@@ -2240,7 +2473,7 @@ namespace cs2_osm_importer
                 {
                     if (!waysByNode.TryGetValue(id, out var onNode))
                         continue;
-                    var road = onNode.FirstOrDefault(IsVehicleRoad);
+                    var road = onNode.FirstOrDefault(roadSet.Contains);
                     if (road == null)
                         continue;
                     var point = RoadPointAt(road, id);
@@ -2260,7 +2493,7 @@ namespace cs2_osm_importer
             // Junction crosswalks are drawn by the junction itself.
             var junctionPoints = new List<float2>();
             foreach (var kv in waysByNode)
-                if (kv.Value.Count(IsVehicleRoad) >= 2 && sourcePositions.TryGetValue(kv.Key, out var jp))
+                if (kv.Value.Count(roadSet.Contains) >= 2 && sourcePositions.TryGetValue(kv.Key, out var jp))
                     junctionPoints.Add(jp);
             var junctionGrid = new Dictionary<(int, int), List<float2>>();
             foreach (var jp in junctionPoints)
@@ -2290,7 +2523,7 @@ namespace cs2_osm_importer
             var leftUnsnapped = 0;
             foreach (var path in ways)
             {
-                if (detailSet.Contains(path) || IsVehicleRoad(path) || path.IsRoundabout || path.NodeIds.Count < 2 || path.Points.Count < 2)
+                if (detailSet.Contains(path) || roadSet.Contains(path) || path.IsRoundabout || path.NodeIds.Count < 2 || path.Points.Count < 2)
                     continue;
                 if (!IsPathLike(path))
                     continue;
@@ -2299,7 +2532,7 @@ namespace cs2_osm_importer
                     var nodeId = end == 0 ? path.NodeIds[0] : path.NodeIds[path.NodeIds.Count - 1];
                     if (!waysByNode.TryGetValue(nodeId, out var onNode))
                         continue;
-                    if (onNode.Any(IsVehicleRoad) || !onNode.Any(detailSet.Contains))
+                    if (onNode.Any(roadSet.Contains) || !onNode.Any(detailSet.Contains))
                         continue; // already on a road, or not ending on a dropped detail
                     var endPoint = end == 0 ? path.Points[0] : path.Points[path.Points.Count - 1];
 
@@ -2309,7 +2542,7 @@ namespace cs2_osm_importer
                         target = crossingPoint;
                         snappedToCrossing++;
                     }
-                    else if (TrySnapToRoad(endPoint, roads, out target))
+                    else if (TrySnapToRoad(endPoint, roads, roadIndex, out target))
                     {
                         snappedToRoad++;
                     }
@@ -2355,15 +2588,17 @@ namespace cs2_osm_importer
         /// Nearest point on any road within PathToRoadSnapMeters. An existing road point within RoadPointReuseMeters is
         /// reused; otherwise the projected point is inserted into that road so CS2 has a node to join the path to.
         /// </summary>
-        private static bool TrySnapToRoad(float3 p, List<OsmWay> roads, out float3 target)
+        /// <param name="roadIndex">Spatial prefilter over <paramref name="roads"/>: only roads near p are scanned, in list order.</param>
+        private static bool TrySnapToRoad(float3 p, List<OsmWay> roads, PolylineIndex roadIndex, out float3 target)
         {
             target = default;
             OsmWay bestRoad = null;
             var bestSegment = -1;
             var bestT = 0f;
             var bestDistance = PathToRoadSnapMeters;
-            foreach (var road in roads)
+            foreach (var r in roadIndex.Query(p.xz - PathToRoadSnapMeters, p.xz + PathToRoadSnapMeters))
             {
+                var road = roads[r];
                 var pts = road.Points;
                 for (var i = 1; i < pts.Count; i++)
                 {
@@ -3278,6 +3513,129 @@ namespace cs2_osm_importer
 
             var t = math.clamp(math.dot(point - start, segment) / lengthSq, 0f, 1f);
             return math.distance(point, start + segment * t);
+        }
+
+        /// <summary>
+        /// Drops road points that lie on the straight line between the points kept around them: within planTolerance
+        /// in plan (straight roads stay exactly on their OSM line) and heightTolerance in height. Every CS2 edge costs
+        /// memory (about 48 KB each, measured), and the 15 m terrain split plus OSM's extra nodes on straight streets
+        /// gave full Seattle ~400k edges, more than a 28 GB machine can hold; this removes about 40% of them.
+        /// Kept always: way ends, points any other way also uses (junctions; bit-identical after UnifySharedPoints),
+        /// and the points of crosswalks, stop signs, traffic lights and turn restrictions, which generation matches to
+        /// the game's nodes. Roundabout rings are left as they are. TerrainHeights stays aligned with Points.
+        /// </summary>
+        private static void SimplifyRoadPoints(List<OsmWay> ways, float planTolerance, float heightTolerance)
+        {
+            if (planTolerance <= 0f || heightTolerance <= 0f)
+                return;
+
+            var useCount = new Dictionary<float3, int>();
+            var seen = new HashSet<float3>();
+            // Features by plan position on a 5 cm grid: their heights were recorded before the elevation profile.
+            var features = new HashSet<(int, int)>();
+            (int, int) FeatureKey(float3 p) => ((int)math.round(p.x * 20f), (int)math.round(p.z * 20f));
+            foreach (var way in ways)
+            {
+                seen.Clear();
+                foreach (var p in way.Points)
+                {
+                    if (seen.Add(p))
+                        useCount[p] = useCount.TryGetValue(p, out var c) ? c + 1 : 1;
+                }
+                foreach (var f in way.Crosswalks) features.Add(FeatureKey(f.Position));
+                foreach (var f in way.StopSigns) features.Add(FeatureKey(f.Position));
+                foreach (var f in way.TrafficLights) features.Add(FeatureKey(f.Position));
+                foreach (var r in way.TurnRestrictions) features.Add(FeatureKey(r.ViaPosition));
+            }
+
+            bool NearFeature(float3 p)
+            {
+                var (x, z) = FeatureKey(p);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                        if (features.Contains((x + dx, z + dz)))
+                            return true;
+                return false;
+            }
+
+            int before = 0, after = 0;
+            foreach (var way in ways)
+            {
+                var points = way.Points;
+                before += Math.Max(0, points.Count - 1);
+                var aligned = way.TerrainHeights.Count == points.Count;
+                if (points.Count < 3 || way.IsRoundabout || way.IsNodeRoundabout || !aligned)
+                {
+                    after += Math.Max(0, points.Count - 1);
+                    continue;
+                }
+
+                var keep = new bool[points.Count];
+                keep[0] = keep[points.Count - 1] = true;
+                for (var i = 1; i < points.Count - 1; i++)
+                {
+                    if (useCount[points[i]] > 1 || NearFeature(points[i]))
+                        keep[i] = true;
+                }
+
+                var anchor = 0;
+                for (var i = 1; i < points.Count; i++)
+                {
+                    if (!keep[i])
+                        continue;
+                    MarkSimplifiedPoints(points, anchor, i, planTolerance, heightTolerance, keep);
+                    anchor = i;
+                }
+
+                var keptPoints = new List<float3>(points.Count);
+                var keptHeights = new List<float>(points.Count);
+                for (var i = 0; i < points.Count; i++)
+                {
+                    if (!keep[i])
+                        continue;
+                    keptPoints.Add(points[i]);
+                    keptHeights.Add(way.TerrainHeights[i]);
+                }
+                points.Clear();
+                points.AddRange(keptPoints);
+                way.TerrainHeights.Clear();
+                way.TerrainHeights.AddRange(keptHeights);
+                after += Math.Max(0, points.Count - 1);
+            }
+
+            Mod.log.Info($"Simplified road points: {before} segments to {after} ({100f * (before - after) / Math.Max(1, before):F0}% fewer; " +
+                         $"points within {planTolerance} m in plan and {heightTolerance} m in height of the line between their neighbours dropped; junctions and node features kept).");
+        }
+
+        /// <summary>Douglas-Peucker between kept points a and b: marks the farthest point outside the tolerances, recursively.</summary>
+        private static void MarkSimplifiedPoints(List<float3> points, int a, int b, float planTolerance, float heightTolerance, bool[] keep)
+        {
+            while (b - a >= 2)
+            {
+                var start = points[a];
+                var end = points[b];
+                var chord = (end - start).xz;
+                var chordLengthSq = math.max(1e-6f, math.lengthsq(chord));
+                var worst = 1f;
+                var worstIndex = -1;
+                for (var i = a + 1; i < b; i++)
+                {
+                    var t = math.saturate(math.dot((points[i] - start).xz, chord) / chordLengthSq);
+                    var plan = math.distance(points[i].xz, start.xz + chord * t) / planTolerance;
+                    var height = math.abs(points[i].y - math.lerp(start.y, end.y, t)) / heightTolerance;
+                    var score = math.max(plan, height);
+                    if (score > worst)
+                    {
+                        worst = score;
+                        worstIndex = i;
+                    }
+                }
+                if (worstIndex < 0)
+                    return;
+                keep[worstIndex] = true;
+                MarkSimplifiedPoints(points, a, worstIndex, planTolerance, heightTolerance, keep);
+                a = worstIndex;
+            }
         }
 
         private static void AddInterpolatedPoints(

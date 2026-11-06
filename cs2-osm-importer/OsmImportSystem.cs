@@ -121,6 +121,17 @@ namespace cs2_osm_importer
         private int _lastLoggedSegments;
         private int _sessionId;
         private int _applyWaitFrames;
+        // Frames to let the game apply queued definitions before the next generation step.
+        private const int ApplySettleFrames = 30;
+        // Set by a post-road step (parking, parks) that needs a full settle round before its next call.
+        private bool _postStepSettle;
+
+        private bool TakePostStepSettle()
+        {
+            var settle = _postStepSettle;
+            _postStepSettle = false;
+            return settle;
+        }
         private ApplyWaitPurpose _applyWaitPurpose;
         private int _baselineEdgeCount;
         private HashSet<Entity> _baselineSegments = new HashSet<Entity>();
@@ -157,6 +168,7 @@ namespace cs2_osm_importer
         }
 
         private List<QueuedSegmentInfo> _queuedSegmentInfos = new List<QueuedSegmentInfo>();
+        private readonly HashSet<string> _loggedUnmatchedPrefabRules = new HashSet<string>();
         private List<string> _generationTypeOrder = new List<string>();
         private List<OsmWay> _roundaboutWays = new List<OsmWay>();
         private List<OsmWay> _roundaboutConnectorWays = new List<OsmWay>();
@@ -229,7 +241,86 @@ namespace cs2_osm_importer
             _terrainSystem = World.GetOrCreateSystemManaged<TerrainSystem>();
         }
 
+        // Frame stats while importing, so a slow import shows whether the importer or the game is spending the time.
+        private readonly System.Diagnostics.Stopwatch _frameStatsWindow = new System.Diagnostics.Stopwatch();
+        private int _frameStatsFrames;
+        private double _frameStatsImporterMs;
+        private double _frameStatsImporterMaxMs;
+        private const double FrameStatsIntervalSeconds = 5.0;
+
         protected override void OnUpdate()
+        {
+            var tracking = IsImporting || LakesFilling;
+            var started = tracking ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+            UpdateImporter();
+            if (!tracking)
+            {
+                _frameStatsWindow.Reset();
+                return;
+            }
+
+            var importerMs = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (!_frameStatsWindow.IsRunning)
+            {
+                _frameStatsWindow.Restart();
+                _frameStatsFrames = 0;
+                _frameStatsImporterMs = 0;
+                _frameStatsImporterMaxMs = 0;
+            }
+            _frameStatsFrames++;
+            _frameStatsImporterMs += importerMs;
+            _frameStatsImporterMaxMs = Math.Max(_frameStatsImporterMaxMs, importerMs);
+            var seconds = _frameStatsWindow.Elapsed.TotalSeconds;
+            if (seconds < FrameStatsIntervalSeconds)
+                return;
+            Mod.log.Info($"Import frame stats: {_frameStatsFrames} frames in {seconds:F1} s (avg frame {seconds * 1000.0 / _frameStatsFrames:F0} ms); " +
+                         $"importer {_frameStatsImporterMs / _frameStatsFrames:F1} ms/frame avg, {_frameStatsImporterMaxMs:F0} ms max; " +
+                         $"phase {_phase}/{_applyWaitPurpose}, parking {_parkingStep}, lakes filling {_lakeFills.Count}; " +
+                         $"memory: process {ProcessMemoryMb()} MB, managed heap {GC.GetTotalMemory(false) / (1024 * 1024)} MB.");
+            _frameStatsWindow.Restart();
+            _frameStatsFrames = 0;
+            _frameStatsImporterMs = 0;
+            _frameStatsImporterMaxMs = 0;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct ProcessMemoryCounters
+        {
+            public uint cb;
+            public uint PageFaultCount;
+            public UIntPtr PeakWorkingSetSize;
+            public UIntPtr WorkingSetSize;
+            public UIntPtr QuotaPeakPagedPoolUsage;
+            public UIntPtr QuotaPagedPoolUsage;
+            public UIntPtr QuotaPeakNonPagedPoolUsage;
+            public UIntPtr QuotaNonPagedPoolUsage;
+            public UIntPtr PagefileUsage;
+            public UIntPtr PeakPagefileUsage;
+        }
+
+        [System.Runtime.InteropServices.DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool GetProcessMemoryInfo(IntPtr process, out ProcessMemoryCounters counters, uint size);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        /// <summary>The game's private (committed) memory in MB; the Mono Process API reports 0 here. -1 if unavailable.</summary>
+        private static long ProcessMemoryMb()
+        {
+            try
+            {
+                var counters = new ProcessMemoryCounters { cb = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(ProcessMemoryCounters)) };
+                if (!GetProcessMemoryInfo(GetCurrentProcess(), out counters, counters.cb))
+                    return -1;
+                return (long)(counters.PagefileUsage.ToUInt64() / (1024 * 1024));
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private void UpdateImporter()
         {
             LogPrefabCatalogOnce();
             UpdateGeometryReportRequests();
@@ -397,8 +488,14 @@ namespace cs2_osm_importer
             }
         }
 
+        // From Generate to "roads, parking and parks built" (lake filling excluded), logged once per generation.
+        private readonly System.Diagnostics.Stopwatch _generationClock = new System.Diagnostics.Stopwatch();
+        private bool _generationReadyLogged;
+
         private void PrepareGeneration()
         {
+            _generationClock.Restart();
+            _generationReadyLogged = false;
             try
             {
                 _activeGenerateOptions = _pendingGenerateOptions;
@@ -726,7 +823,7 @@ namespace cs2_osm_importer
                     Mod.log.Info($"OSM road generation wait: {consumedDefinitions}/{_importedSegments} definitions consumed, {generatedRoadEdges} new road edges detected");
                 }
 
-                if (_applyWaitFrames >= 30 && generatedRoadEdges > 0)
+                if (_applyWaitFrames >= ApplySettleFrames && generatedRoadEdges > 0)
                 {
                     if (_applyWaitPurpose == ApplyWaitPurpose.AfterConnectors && _roundaboutWays.Count > 0)
                     {
@@ -795,17 +892,30 @@ namespace cs2_osm_importer
 
                     // Parking lots last: their entrances need the finished streets, and their own path edges must not
                     // be mistaken for roads by the name matching above.
+                    // A step that polls (object batches, waiting for its definitions) runs again next frame; a full
+                    // settle round only when it asks for one. Waiting a whole round after every batch cost 30 frames
+                    // per batch: 25 minutes of stall and tree batches on a slow frame rate.
                     if (ProcessParkingLotStep())
                     {
-                        _applyWaitFrames = 0;
+                        _applyWaitFrames = TakePostStepSettle() ? 0 : ApplySettleFrames;
                         return;
                     }
 
                     // Parks after parking lots: their buildings keep off the lots' aisles and garages.
                     if (ProcessParkStep())
                     {
-                        _applyWaitFrames = 0;
+                        _applyWaitFrames = TakePostStepSettle() ? 0 : ApplySettleFrames;
                         return;
+                    }
+
+                    if (!_generationReadyLogged)
+                    {
+                        _generationReadyLogged = true;
+                        // Road and roundabout definitions the game applied but left in place (see CountUnprocessedDefinitions).
+                        var cleared = DestroyProcessedDefinitions(SessionDefinitions());
+                        Mod.log.Info($"Generation ready: roads, parking lots and parks built {_generationClock.Elapsed.TotalSeconds:F1} s after Generate" +
+                                     (LakesFilling ? $"; {_lakeFills.Count} lake water sources still filling" : string.Empty) +
+                                     $"; {cleared} processed definitions cleared.");
                     }
 
                     // Lakes were started with the generation; finish once they are full.
@@ -823,7 +933,6 @@ namespace cs2_osm_importer
                     Mod.log.Info($"{message} Session {_sessionId}");
                     HasGeneratedAssets = true;
                     Complete(message);
-                    ScheduleAutoGeometryReport();
                     return;
                 }
 
@@ -865,7 +974,6 @@ namespace cs2_osm_importer
                     Mod.log.Info($"{fallbackMessage} Session {_sessionId}");
                     HasGeneratedAssets = true;
                     Complete(fallbackMessage);
-                    ScheduleAutoGeometryReport();
                 }
             }
             catch (Exception ex)
@@ -2400,7 +2508,10 @@ namespace cs2_osm_importer
                 if (TryGetManualPrefabForWay(way, out var manualPrefab))
                     return manualPrefab;
 
-                Mod.log.Warn($"Manual prefab rules exist for highway type '{way.Highway}' but no exact prefab name matched. Using the default fallback prefab instead of heuristic road selection.");
+                // Logged once per combination: on a city-sized import this ran once per segment and flooded the log.
+                var unmatchedKey = $"{way.Highway}|{way.Lanes}|{way.IsOneWay}|{way.Sidewalk}";
+                if (_loggedUnmatchedPrefabRules.Add(unmatchedKey))
+                    Mod.log.Warn($"Manual prefab rules exist for highway type '{way.Highway}' (lanes={way.Lanes}, oneway={way.IsOneWay}, sidewalk={way.Sidewalk}) but no exact prefab name matched. Using the default fallback prefab instead of heuristic road selection.");
                 return _prefabEntity;
             }
 
@@ -4111,12 +4222,33 @@ namespace cs2_osm_importer
                 .ToList();
         }
 
+        /// <summary>This import session's definition entities that still exist.</summary>
+        private List<Entity> SessionDefinitions()
+        {
+            using var entities = GetEntityQuery(
+                ComponentType.ReadOnly<OsmImportDefinition>(),
+                ComponentType.ReadOnly<CreationDefinition>()).ToEntityArray(Allocator.Temp);
+            var result = new List<Entity>();
+            foreach (var entity in entities)
+            {
+                if (EntityManager.GetComponentData<OsmImportDefinition>(entity).SessionId == _sessionId)
+                    result.Add(entity);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Road definitions of this session the game has not processed yet (still tagged Updated; see
+        /// CountUnprocessedDefinitions). Counting every definition that still exists showed "0 consumed" for minutes
+        /// after the roads were built whenever the game left the processed definitions in place.
+        /// </summary>
         private int CountPendingDefinitions()
         {
             using var entities = GetEntityQuery(
                 ComponentType.ReadOnly<OsmImportDefinition>(),
                 ComponentType.ReadOnly<CreationDefinition>(),
-                ComponentType.ReadOnly<NetCourse>()).ToEntityArray(Allocator.Temp);
+                ComponentType.ReadOnly<NetCourse>(),
+                ComponentType.ReadOnly<Updated>()).ToEntityArray(Allocator.Temp);
 
             var count = 0;
             foreach (var entity in entities)

@@ -51,6 +51,7 @@ namespace cs2_osm_importer
 
         private ParkingStep _parkingStep = ParkingStep.NotStarted;
         private int _parkingWaitFrames;
+        private int _parkingSettleFrames;
         private readonly List<QueuedParkingLot> _queuedParkingLots = new List<QueuedParkingLot>();
         private readonly List<Entity> _parkingDefinitions = new List<Entity>();
         private readonly List<ParkingStall> _pendingStalls = new List<ParkingStall>();
@@ -66,6 +67,7 @@ namespace cs2_osm_importer
         {
             _parkingStep = ParkingStep.NotStarted;
             _parkingWaitFrames = 0;
+            _parkingSettleFrames = 0;
             _queuedParkingLots.Clear();
             _parkingDefinitions.Clear();
             _pendingStalls.Clear();
@@ -94,6 +96,7 @@ namespace cs2_osm_importer
                             return false;
                         _parkingStep = ParkingStep.WaitingForApply;
                         _parkingWaitFrames = 0;
+                        _parkingSettleFrames = 0;
                         SetStatus(LF("OsmImporter.Status.BuildingParkingLots", "Building {0} parking lots...", _queuedParkingLots.Count));
                         return true;
 
@@ -107,12 +110,14 @@ namespace cs2_osm_importer
                                 QueueParkingStall(_pendingStalls[_pendingStallIndex]);
                             return true;
                         }
-                        if (CountPendingParkingDefinitions() > 0 && _parkingWaitFrames < MaxApplyWaitFrames)
+                        if (!DefinitionsApplied(_parkingDefinitions, ref _parkingSettleFrames) && _parkingWaitFrames < MaxApplyWaitFrames)
                             return true;
-                        Mod.log.Info($"Parking definitions applied after {_parkingWaitFrames} frames ({CountPendingParkingDefinitions()} still pending).");
+                        Mod.log.Info($"Parking definitions applied after {_parkingWaitFrames} frames ({CountUnprocessedDefinitions(_parkingDefinitions)} unprocessed); " +
+                                     $"{DestroyProcessedDefinitions(_parkingDefinitions)} processed definitions cleared.");
                         AssignParkingOwnership();
                         _parkingStep = ParkingStep.Done;
                         // One more round of frames so the stalls rebuild their parking lanes as owned objects.
+                        _postStepSettle = true;
                         return true;
 
                     default:
@@ -365,14 +370,53 @@ namespace cs2_osm_importer
         }
 
         // Only the parking definitions: unconsumed road definitions from earlier phases must not hold this step up.
-        private int CountPendingParkingDefinitions()
+        // Frames to wait after the last definition was processed before reading what the game built.
+        private const int DefinitionSettleFrames = 2;
+
+        /// <summary>
+        /// Definitions the game has not processed yet. The game builds from a definition in the frame it carries Updated
+        /// and strips the tag at the end of that frame, so a definition without it has been applied. Its entity is
+        /// normally destroyed next frame by the active tool, but not always: after Delete Generated every definition of
+        /// the next import stayed in place for the full 3600-frame timeout although everything was built (parking and
+        /// parks waited ~2 minutes each on a fifth of Seattle). So the entity still existing is no sign of "pending".
+        /// </summary>
+        private int CountUnprocessedDefinitions(List<Entity> definitions)
         {
             var count = 0;
-            foreach (var e in _parkingDefinitions)
-                if (EntityManager.Exists(e) && EntityManager.HasComponent<CreationDefinition>(e))
+            foreach (var e in definitions)
+            {
+                if (EntityManager.Exists(e) && EntityManager.HasComponent<CreationDefinition>(e) && EntityManager.HasComponent<Updated>(e))
                     count++;
+            }
             return count;
         }
+
+        /// <summary>True once every definition is processed and DefinitionSettleFrames more frames have passed.</summary>
+        private bool DefinitionsApplied(List<Entity> definitions, ref int settleFrames)
+        {
+            if (CountUnprocessedDefinitions(definitions) > 0)
+            {
+                settleFrames = 0;
+                return false;
+            }
+            return ++settleFrames > DefinitionSettleFrames;
+        }
+
+        /// <summary>Destroys processed definitions the game left in place (see CountUnprocessedDefinitions), so they are
+        /// never applied again by a later tool action and hold no memory. Returns how many were destroyed.</summary>
+        private int DestroyProcessedDefinitions(IEnumerable<Entity> definitions)
+        {
+            var destroyed = 0;
+            foreach (var e in definitions)
+            {
+                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<CreationDefinition>(e) || EntityManager.HasComponent<Updated>(e))
+                    continue;
+                EntityManager.DestroyEntity(e);
+                destroyed++;
+            }
+            return destroyed;
+        }
+
 
         /// <summary>Finds what the game built for each queued lot and makes the surface own its paths and stalls.</summary>
         private void AssignParkingOwnership()
@@ -632,9 +676,10 @@ namespace cs2_osm_importer
                         mids.Add((e, midPoint, midDir, half, length));
                     }
                     var prev = curve.a.xz;
-                    for (var i = 1; i <= 8; i++)
+                    var pieces = CurvePieces(curve, 8);
+                    for (var i = 1; i <= pieces; i++)
                     {
-                        var next = MathUtils.Position(curve, i / 8f).xz;
+                        var next = MathUtils.Position(curve, i / (float)pieces).xz;
                         // Negative half width marks a road that may not take an entrance (still kept clear of stalls).
                         Add(prev, next, isEntranceRoad ? half : -half);
                         if (isHighway)
@@ -642,6 +687,20 @@ namespace cs2_osm_importer
                         prev = next;
                     }
                 }
+            }
+
+            /// <summary>
+            /// Pieces to index a curve as: one for a straight edge (its control points within 5 cm of the chord: the
+            /// importer queues straight courses, so nearly every edge), otherwise <paramref name="curvedPieces"/>.
+            /// Eight pieces per straight edge filled every grid cell with collinear bits and made park building
+            /// placement, which runs thousands of street queries per park, take 28 s on full Seattle.
+            /// </summary>
+            internal static int CurvePieces(Colossal.Mathematics.Bezier4x3 curve, int curvedPieces)
+            {
+                var a = curve.a.xz;
+                var d = curve.d.xz;
+                var off = math.max(ParkingGeometry.DistanceToSegment(curve.b.xz, a, d), ParkingGeometry.DistanceToSegment(curve.c.xz, a, d));
+                return off <= 0.05f ? 1 : curvedPieces;
             }
 
             private readonly List<(float2 A, float2 B, float Half)> _highways = new List<(float2, float2, float)>();
@@ -675,17 +734,21 @@ namespace cs2_osm_importer
                 }
             }
 
+            /// <summary>
+            /// Street segments in the cells touching [min, max]. A segment spanning several cells is returned once per
+            /// cell: every caller takes a minimum, a strictly better one or any match, which a repeat cannot change.
+            /// (De-duplicating with a new HashSet per call made park building placement take 12 s on a fifth of
+            /// Seattle: it runs thousands of these queries per park.)
+            /// </summary>
             private IEnumerable<(float2 A, float2 B, float Half)> Near(float2 min, float2 max)
             {
-                var seen = new HashSet<(float2, float2)>();
                 for (var x = (int)math.floor(min.x / Cell); x <= (int)math.floor(max.x / Cell); x++)
                 for (var z = (int)math.floor(min.y / Cell); z <= (int)math.floor(max.y / Cell); z++)
                 {
                     if (!_cells.TryGetValue((x, z), out var list))
                         continue;
                     foreach (var s in list)
-                        if (seen.Add((s.A, s.B)))
-                            yield return s;
+                        yield return s;
                 }
             }
 

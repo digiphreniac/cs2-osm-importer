@@ -73,6 +73,7 @@ namespace cs2_osm_importer
                 }
                 highwayWays.Add((w, list));
             }
+            var highwayIndex = new PolylineIndex(highwayWays.Select(h => h.Nodes).ToList(), 0.01f);
 
             int lines = 0, areas = 0, mappedOnArea = 0, skipped = 0, snapped = 0, connectors = 0, unreachable = 0, pierJoins = 0;
             // Every pier walkway (lines and areas), so a pier end can join another pier (finger docks are often mapped
@@ -117,6 +118,8 @@ namespace cs2_osm_importer
                     len += math.distance(l[k - 1], l[k]);
                 return len;
             }
+            // Bounding boxes of the pier lines: lines whose boxes are farther apart than a test distance can't pass it.
+            var pierLineBoxes = pierLineNodes.Select(BoundsOf).ToList();
             for (var i = 0; i < pierLineNodes.Count; i++)
             {
                 // Short lines (finger stubs off a main dock) lie mostly near it without being a double.
@@ -126,6 +129,9 @@ namespace cs2_osm_importer
                 for (var k = 0; k < pierLineNodes.Count; k++)
                 {
                     if (k == i || pierLineNodes[k].Count < 2 || droppedLines.Contains(pierLineElements[k]))
+                        continue;
+                    // No sample of i lies within PierParallelLineMeters of k: near would be 0.
+                    if (!BoxesTouch(pierLineBoxes[i], pierLineBoxes[k], PierParallelLineMeters + 0.01f))
                         continue;
                     var near = samples.Count(p => DistanceToPolyline(pierLineNodes[k], p) < PierParallelLineMeters);
                     if (near < samples.Count * 0.7f)
@@ -184,11 +190,15 @@ namespace cs2_osm_importer
                 if (ParkingGeometry.SignedArea(ring) < 0f)
                     ring.Reverse();
 
-                // Footways mapped on the pier: those are the walkway; mark them as pier decks.
-                var onIt = highwayWays.Where(h => h.Nodes.Count(n => ParkingGeometry.Contains(ring, n.P)) >= 2).ToList();
+                // Footways mapped on the pier: those are the walkway; mark them as pier decks. Only paths with a
+                // segment box touching the outline's box can have nodes inside it.
+                var ringBox = BoundsOf(ring);
+                var onIt = highwayIndex.Query(ringBox.Min - 0.01f, ringBox.Max + 0.01f)
+                    .Select(w => highwayWays[w])
+                    .Where(h => h.Nodes.Count(n => ParkingGeometry.Contains(ring, n.P)) >= 2).ToList();
                 // The same dock when at least half the line's length runs inside the outline (a long main dock
                 // crossing a small finger area is not).
-                var lineOnIt = pierLineNodes.Any(l =>
+                var lineOnIt = pierLineNodes.Where((l, k) => BoxesTouch(pierLineBoxes[k], ringBox, 0.01f)).Any(l =>
                 {
                     if (l.Count < 2)
                         return false;
@@ -248,7 +258,7 @@ namespace cs2_osm_importer
                         long id = 0;
                         var isFreeEnd = (i == 0 || i == line.Count - 1) && endCounts[Key(line[i])] == 1;
                         // A free end reaches for the shore: onto the nearest path, at a node of it or a new one in it.
-                        if (isFreeEnd && TryNearestPathPoint(highwayWays, line[i], PierShoreSnapMeters, out var hit))
+                        if (isFreeEnd && TryNearestPathPoint(highwayWays, highwayIndex, line[i], PierShoreSnapMeters, out var hit, null))
                         {
                             id = AttachToPath(xml, highwayWays, hit, nodes, lat0, lon0, metersPerDegreeLon, roadNodeIds);
                             snapped++;
@@ -284,28 +294,22 @@ namespace cs2_osm_importer
                     i = group[i] = group[group[i]];
                 return i;
             }
+            // Ends move up to PierJoinMeters onto a joint during this pass: the boxes allow for it.
+            var targetIndex = new PolylineIndex(pierTargets.Select(t => t.Nodes).ToList(), PierJoinMeters + 0.01f);
             for (var b = 0; b < builds.Count; b++)
             {
                 foreach (var end in builds[b].FreeEnds)
                 {
-                    var others = new List<(XmlElement Element, List<(long Id, float2 P)> Nodes)>();
-                    var otherIndex = new List<int>();
-                    for (var t = 0; t < pierTargets.Count; t++)
-                    {
-                        if (targetPier[t] != b)
-                        {
-                            others.Add(pierTargets[t]);
-                            otherIndex.Add(t);
-                        }
-                    }
-                    var onPier = TryNearestPathPoint(others, end.P, PierJoinMeters, out var hit);
+                    // Walkways of the other piers (hit.Way indexes pierTargets).
+                    var self = b;
+                    var onPier = TryNearestPathPoint(pierTargets, targetIndex, end.P, PierJoinMeters, out var hit, t => targetPier[t] != self);
                     // A path or street just as close (a pier line ending on the shore path without sharing its node).
-                    var onPath = TryNearestPathPoint(highwayWays, end.P, onPier ? hit.Distance : PierJoinMeters, out var pathHit);
+                    var onPath = TryNearestPathPoint(highwayWays, highwayIndex, end.P, onPier ? hit.Distance : PierJoinMeters, out var pathHit, null);
                     if (!onPier && !onPath)
                         continue;
                     var id = onPath
                         ? AttachToPath(xml, highwayWays, pathHit, nodes, lat0, lon0, metersPerDegreeLon, roadNodeIds)
-                        : AttachToPath(xml, others, hit, nodes, lat0, lon0, metersPerDegreeLon, roadNodeIds);
+                        : AttachToPath(xml, pierTargets, hit, nodes, lat0, lon0, metersPerDegreeLon, roadNodeIds);
                     var point = onPath ? pathHit.Point : hit.Point;
                     // Move this end onto the joint.
                     var nds = end.Way.SelectNodes("nd").Cast<XmlElement>().ToList();
@@ -318,7 +322,7 @@ namespace cs2_osm_importer
                     }
                     else
                     {
-                        group[Find(b)] = Find(targetPier[otherIndex[hit.Way]]);
+                        group[Find(b)] = Find(targetPier[hit.Way]);
                         pierJoins++;
                     }
                 }
@@ -342,7 +346,7 @@ namespace cs2_osm_importer
                         continue;
                     foreach (var p in pierTargets[t].Nodes)
                     {
-                        if (TryNearestPathPoint(highwayWays, p.P, bestDistance, out var hit))
+                        if (TryNearestPathPoint(highwayWays, highwayIndex, p.P, bestDistance, out var hit, null))
                         {
                             bestDistance = hit.Distance;
                             best = hit;
@@ -374,6 +378,26 @@ namespace cs2_osm_importer
             Mod.log.Info($"Piers: {lines} pier lines and {areas} pier areas as walkways ({snapped} ends joined to a shore path, {pierJoins} to another pier, {connectors} groups joined by a short added footway), {mappedOnArea} pier areas with their own mapped footways; {droppedLines.Count} pier lines dropped as doubles of a pier beside them, {skipped} pier areas skipped (too small or no walkway found), {unreachable} with no path within reach (swimming rafts and the like).");
         }
 
+        private static (float2 Min, float2 Max) BoundsOf(List<float2> points)
+        {
+            if (points.Count == 0)
+                return (new float2(float.MaxValue), new float2(float.MinValue));
+            var min = points[0];
+            var max = points[0];
+            foreach (var p in points)
+            {
+                min = math.min(min, p);
+                max = math.max(max, p);
+            }
+            return (min, max);
+        }
+
+        private static bool BoxesTouch((float2 Min, float2 Max) a, (float2 Min, float2 Max) b, float margin)
+        {
+            return a.Min.x - margin <= b.Max.x && b.Min.x - margin <= a.Max.x &&
+                   a.Min.y - margin <= b.Max.y && b.Min.y - margin <= a.Max.y;
+        }
+
         private sealed class PierBuild
         {
             public readonly List<XmlElement> Ways = new List<XmlElement>();
@@ -391,13 +415,111 @@ namespace cs2_osm_importer
             public long NodeId;   // an existing node near the point (within PierJointMergeMeters), else 0
         }
 
+        /// <summary>
+        /// Segment bounding boxes of a list of polylines in a coarse grid. Only a prefilter for searches over thousands
+        /// of paths (city-sized imports spent most of the pier phase scanning every path for every pier end): callers
+        /// run the exact test on the returned polylines in list order, so results are the same as a full scan.
+        /// Boxes are inflated by <c>slack</c> to cover points that later move that far (a pier end moved onto a joint).
+        /// Points inserted into a segment stay inside its box.
+        /// </summary>
+        private sealed class PolylineIndex
+        {
+            private const float CellSize = 64f;
+            private readonly Dictionary<long, List<int>> _cells = new Dictionary<long, List<int>>();
+            private readonly int[] _seen;
+            private int _stamp;
+
+            public PolylineIndex(IReadOnlyList<List<(long Id, float2 P)>> lines, float slack)
+                : this(lines.Count, w => lines[w].Count, (w, i) => lines[w][i].P, slack)
+            {
+            }
+
+            /// <summary>Polyline w has pointCount(w) points; point(w, i) is its i-th point.</summary>
+            public PolylineIndex(int count, Func<int, int> pointCount, Func<int, int, float2> point, float slack)
+            {
+                _seen = new int[count];
+                for (var w = 0; w < count; w++)
+                {
+                    var n = pointCount(w);
+                    for (var s = 0; s < n; s++)
+                    {
+                        // Single points too, so a one-node line is still found.
+                        if (s + 1 >= n && n > 1)
+                            break;
+                        var a = point(w, s);
+                        var b = s + 1 < n ? point(w, s + 1) : a;
+                        Add(w, math.min(a, b) - slack, math.max(a, b) + slack);
+                    }
+                }
+            }
+
+            private static long Key(int x, int y) => ((long)x << 32) ^ (uint)y;
+
+            private void Add(int w, float2 min, float2 max)
+            {
+                var x0 = (int)math.floor(min.x / CellSize);
+                var y0 = (int)math.floor(min.y / CellSize);
+                var x1 = (int)math.floor(max.x / CellSize);
+                var y1 = (int)math.floor(max.y / CellSize);
+                for (var x = x0; x <= x1; x++)
+                    for (var y = y0; y <= y1; y++)
+                    {
+                        var key = Key(x, y);
+                        if (!_cells.TryGetValue(key, out var list))
+                            _cells[key] = list = new List<int>();
+                        if (list.Count == 0 || list[list.Count - 1] != w)
+                            list.Add(w);
+                    }
+            }
+
+            /// <summary>Indices (ascending) of polylines with a segment box touching [min, max].</summary>
+            public List<int> Query(float2 min, float2 max)
+            {
+                _stamp++;
+                var result = new List<int>();
+                var x0 = (int)math.floor(min.x / CellSize);
+                var y0 = (int)math.floor(min.y / CellSize);
+                var x1 = (int)math.floor(max.x / CellSize);
+                var y1 = (int)math.floor(max.y / CellSize);
+                for (var x = x0; x <= x1; x++)
+                    for (var y = y0; y <= y1; y++)
+                    {
+                        if (!_cells.TryGetValue(Key(x, y), out var list))
+                            continue;
+                        foreach (var w in list)
+                        {
+                            if (_seen[w] == _stamp)
+                                continue;
+                            _seen[w] = _stamp;
+                            result.Add(w);
+                        }
+                    }
+                result.Sort();
+                return result;
+            }
+        }
+
         /// <summary>The nearest point on any path within maxDistance of p.</summary>
         private static bool TryNearestPathPoint(List<(XmlElement Element, List<(long Id, float2 P)> Nodes)> paths, float2 p, float maxDistance, out PathHit hit)
         {
+            return TryNearestPathPoint(paths, null, p, maxDistance, out hit, null);
+        }
+
+        /// <summary>
+        /// The nearest point on any path within maxDistance of p, among the paths the index returns near p (all paths
+        /// without an index) and that <c>include</c> accepts. Same scan order and tie-breaking as a full scan.
+        /// </summary>
+        private static bool TryNearestPathPoint(List<(XmlElement Element, List<(long Id, float2 P)> Nodes)> paths, PolylineIndex index, float2 p, float maxDistance, out PathHit hit, Func<int, bool> include)
+        {
             hit = default;
             var found = false;
-            for (var w = 0; w < paths.Count; w++)
+            var candidates = index?.Query(p - maxDistance, p + maxDistance);
+            var count = candidates?.Count ?? paths.Count;
+            for (var c = 0; c < count; c++)
             {
+                var w = candidates != null ? candidates[c] : c;
+                if (include != null && !include(w))
+                    continue;
                 var pts = paths[w].Nodes;
                 for (var s = 0; s + 1 < pts.Count; s++)
                 {

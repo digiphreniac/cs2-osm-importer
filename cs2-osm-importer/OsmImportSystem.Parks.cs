@@ -56,6 +56,7 @@ namespace cs2_osm_importer
 
         private ParkStep _parkStep = ParkStep.NotStarted;
         private int _parkWaitFrames;
+        private int _parkSettleFrames;
         private readonly List<Entity> _parkDefinitions = new List<Entity>();
         private readonly List<(Entity Prefab, float3 Position, quaternion Rotation, float Age)> _pendingParkTrees = new List<(Entity, float3, quaternion, float)>();
         private int _pendingParkTreeIndex;
@@ -86,6 +87,7 @@ namespace cs2_osm_importer
         {
             _parkStep = ParkStep.NotStarted;
             _parkWaitFrames = 0;
+            _parkSettleFrames = 0;
             _parkDefinitions.Clear();
             _pendingParkTrees.Clear();
             _pendingParkTreeIndex = 0;
@@ -127,15 +129,18 @@ namespace cs2_osm_importer
                         {
                             _parkStep = ParkStep.WaitingForApply;
                             _parkWaitFrames = 0;
+                            _parkSettleFrames = 0;
                         }
                         return true;
 
                     case ParkStep.WaitingForApply:
                         _parkWaitFrames++;
-                        if (_parkDefinitions.Any(e => EntityManager.Exists(e) && EntityManager.HasComponent<CreationDefinition>(e)) && _parkWaitFrames < MaxApplyWaitFrames)
+                        if (!DefinitionsApplied(_parkDefinitions, ref _parkSettleFrames) && _parkWaitFrames < MaxApplyWaitFrames)
                             return true;
                         TrackGeneratedParks();
+                        Mod.log.Info($"Park definitions: {DestroyProcessedDefinitions(_parkDefinitions)} processed definitions cleared.");
                         _parkStep = ParkStep.Done;
+                        _postStepSettle = true;
                         return true;
 
                     default:
@@ -191,17 +196,33 @@ namespace cs2_osm_importer
             _featuresMovedTotal = _featuresMovedMax = 0f;
             _queuedParkSurfaces = 0;
             var parksWithBuildings = 0;
+            // Per-park timing: the slowest parks are logged, to find what makes park planning slow on big imports.
+            var parkTimes = new List<(double Features, double Buildings, double Trees, OsmParkArea Park)>();
+            var total = System.Diagnostics.Stopwatch.StartNew();
+            var sw = new System.Diagnostics.Stopwatch();
             foreach (var park in _document.Parks)
             {
                 QueueParkSurface(park.Ring);
                 _currentParkObstacles = park.Obstacles;
                 var footprints = new List<(float2 Center, float2 Front, float2 Size)>();
+                sw.Restart();
                 var features = PlaceParkFeatures(park, streets, paths, footprints, ref random);
+                var featureMs = sw.Elapsed.TotalMilliseconds;
+                sw.Restart();
                 var placed = features + PlaceParkBuildings(park, streets, paths, footprints, ref random, features);
+                var buildingMs = sw.Elapsed.TotalMilliseconds;
                 if (placed > 0)
                     parksWithBuildings++;
+                sw.Restart();
                 PlanParkTrees(park, streets, paths, footprints, ref random);
+                parkTimes.Add((featureMs, buildingMs, sw.Elapsed.TotalMilliseconds, park));
             }
+            Mod.log.Info($"Park planning took {total.Elapsed.TotalSeconds:F1} s (features {parkTimes.Sum(t => t.Features) / 1000:F1} s, " +
+                         $"buildings {parkTimes.Sum(t => t.Buildings) / 1000:F1} s, trees {parkTimes.Sum(t => t.Trees) / 1000:F1} s). Slowest: " +
+                         string.Join("; ", parkTimes.OrderByDescending(t => t.Features + t.Buildings + t.Trees).Take(5).Select(t =>
+                             $"{t.Park.Id} {(t.Features + t.Buildings + t.Trees) / 1000:F1} s ({t.Park.Ring.Count} outline points, {t.Park.AreaSquareMeters / 10000:F1} ha, " +
+                             $"{t.Park.Woods.Count} woods with {t.Park.Woods.Sum(w => w.Count)} points, {t.Park.Obstacles.Count} obstacles, {t.Park.Features.Count} features; " +
+                             $"features {t.Features / 1000:F1} s, buildings {t.Buildings / 1000:F1} s, trees {t.Trees / 1000:F1} s)")));
 
             var movedAverage = _featuresMoved > 0 ? _featuresMovedTotal / _featuresMoved : 0f;
             Mod.log.Info($"Mapped playgrounds and dog parks: {_featuresInPlace} built where mapped, {_featuresMoved} moved to the park's nearest street side " +
@@ -562,9 +583,10 @@ namespace cs2_osm_importer
                     var half = em.GetComponentData<NetGeometryData>(prefab).m_DefaultWidth * 0.5f;
                     var curve = em.GetComponentData<Curve>(e).m_Bezier;
                     var prev = curve.a.xz;
-                    for (var i = 1; i <= 4; i++)
+                    var pieces = ParkingStreetIndex.CurvePieces(curve, 4);
+                    for (var i = 1; i <= pieces; i++)
                     {
-                        var next = MathUtils.Position(curve, i / 4f).xz;
+                        var next = MathUtils.Position(curve, i / (float)pieces).xz;
                         var min = math.min(prev, next) - half;
                         var max = math.max(prev, next) + half;
                         for (var x = (int)math.floor(min.x / Cell); x <= (int)math.floor(max.x / Cell); x++)
