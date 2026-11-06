@@ -108,6 +108,60 @@ namespace cs2_osm_importer
             return false;
         }
 
+        private const float ShoreWayAboveWater = 1f;
+        private const float ShoreWayReach = 15f;
+
+        /// <summary>
+        /// The heightmap's lake bed can reach a few meters past the mapped shore, and the paths along the shore then
+        /// sit on its slope, under the water (seen on Green Lake's west shore: a shore footway at 45-48 m, the lake at
+        /// 49.5 m). Every way point in a lake or within ShoreWayReach of its shore is kept at least ShoreWayAboveWater
+        /// above the lake's level.
+        /// </summary>
+        private void RaiseShoreWays()
+        {
+            if (_document == null || !(_activeGenerateOptions?.GenerateLakes ?? false))
+                return;
+            CacheTerrainHeightData();
+            var levels = new List<(OsmLake Lake, float Level)>();
+            foreach (var lake in _document.Lakes)
+            {
+                if (lake.AreaSquareMeters >= LakeMinSquareMeters && TryLakeLevel(lake, out var level, out _))
+                    levels.Add((lake, level));
+            }
+            if (levels.Count == 0)
+                return;
+            var boxes = levels.Select(l => ParkingGeometry.Bounds(l.Lake.Ring) + new float4(-ShoreWayReach, -ShoreWayReach, ShoreWayReach, ShoreWayReach)).ToList();
+            int raisedWays = 0, raisedPoints = 0;
+            foreach (var way in _document.Ways)
+            {
+                var raised = false;
+                for (var i = 0; i < way.Points.Count; i++)
+                {
+                    var p = way.Points[i];
+                    for (var k = 0; k < levels.Count; k++)
+                    {
+                        var b = boxes[k];
+                        if (p.x < b.x || p.z < b.y || p.x > b.z || p.z > b.w)
+                            continue;
+                        var minY = levels[k].Level + ShoreWayAboveWater;
+                        if (p.y >= minY)
+                            continue;
+                        var ring = levels[k].Lake.Ring;
+                        if (!ParkingGeometry.Contains(ring, p.xz) && ParkingGeometry.DistanceToRing(ring, p.xz) > ShoreWayReach)
+                            continue;
+                        p.y = minY;
+                        way.Points[i] = p;
+                        raised = true;
+                        raisedPoints++;
+                    }
+                }
+                if (raised)
+                    raisedWays++;
+            }
+            if (raisedPoints > 0)
+                Mod.log.Info($"Shore ways: {raisedPoints} points of {raisedWays} ways by the lakes raised above the water (the heightmap's lake bed reaches under them).");
+        }
+
         private void QueueLakes()
         {
             CacheTerrainHeightData();

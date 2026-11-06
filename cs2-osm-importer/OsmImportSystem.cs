@@ -474,6 +474,7 @@ namespace cs2_osm_importer
                 ResetLakeState();
                 // Lakes start filling now and rise slowly while the roads are built.
                 ProcessLakeStep();
+                RaiseShoreWays();
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
