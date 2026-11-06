@@ -10,6 +10,23 @@ namespace cs2_osm_importer
     {
         private const float MinParkSquareMeters = 50f;
 
+        private static readonly HashSet<string> NonLakeWater = new HashSet<string>
+        {
+            "river", "stream", "canal", "ditch", "drain", "wastewater", "fountain", "stream_pool", "rapids", "lock", "fish_pass", "tidal_channel",
+        };
+
+        /// <summary>Standing water the importer fills: lakes, ponds, reservoirs. Not rivers or canals (they slope).</summary>
+        private static bool IsLake(Dictionary<string, string> tags)
+        {
+            if (tags.ContainsKey("highway") || tags.ContainsKey("building") || tags.ContainsKey("leisure"))
+                return false;
+            if (tags.TryGetValue("intermittent", out var intermittent) && intermittent == "yes")
+                return false;
+            if (tags.TryGetValue("natural", out var natural) && natural == "water")
+                return !(tags.TryGetValue("water", out var kind) && NonLakeWater.Contains(kind));
+            return tags.TryGetValue("landuse", out var landuse) && landuse == "reservoir";
+        }
+
         private static bool IsWater(Dictionary<string, string> tags) =>
             (tags.TryGetValue("natural", out var natural) && (natural == "water" || natural == "wetland")) ||
             (tags.TryGetValue("water", out _) && !tags.ContainsKey("highway")) ||
@@ -69,6 +86,35 @@ namespace cs2_osm_importer
 
             var waters = new List<List<float2>>();
 
+            void TakeLake(long id, Dictionary<string, string> tags, List<List<long>> rings, List<List<long>> holes)
+            {
+                var holeRings = (holes ?? new List<List<long>>()).Select(Ring).Where(h => h != null).ToList();
+                foreach (var ids in rings)
+                {
+                    var ring = Ring(ids);
+                    if (ring == null)
+                        continue;
+                    var area = ParkingGeometry.SignedArea(ring);
+                    var centroid = ParkingGeometry.Centroid(ring);
+                    // The same lake tagged on its outline way and on its multipolygon.
+                    if (document.Lakes.Any(l => math.abs(l.AreaSquareMeters - area) < area * 0.01f && math.distance(ParkingGeometry.Centroid(l.Ring), centroid) < 5f))
+                        continue;
+                    var lake = new OsmLake
+                    {
+                        Id = id,
+                        Name = tags.TryGetValue("name", out var name) ? name : string.Empty,
+                        AreaSquareMeters = area,
+                    };
+                    lake.Ring.AddRange(ring);
+                    foreach (var h in holeRings)
+                    {
+                        if (ParkingGeometry.Contains(ring, ParkingGeometry.Centroid(h)))
+                            lake.Holes.Add(h);
+                    }
+                    document.Lakes.Add(lake);
+                }
+            }
+
             void Take(long id, Dictionary<string, string> tags, List<List<long>> rings, List<List<long>> holes = null)
             {
                 var isPark = tags.TryGetValue("leisure", out var leisure) && leisure == "park";
@@ -113,6 +159,8 @@ namespace cs2_osm_importer
                 if (ids.Count < 4 || ids[0] != ids[ids.Count - 1])
                     continue;
                 Take(ReadLong(wayElement, "id"), tags, new List<List<long>> { ids });
+                if (IsLake(tags))
+                    TakeLake(ReadLong(wayElement, "id"), tags, new List<List<long>> { ids }, null);
                 if (IsWater(tags))
                 {
                     var w = Ring(ids);
@@ -146,6 +194,8 @@ namespace cs2_osm_importer
                     }
                     if (water)
                     {
+                        if (IsLake(tags))
+                            TakeLake(ReadLong(relation, "id"), tags, AssembleRings(outerParts), AssembleRings(innerParts));
                         foreach (var ids in AssembleRings(outerParts))
                         {
                             var w = Ring(ids);

@@ -123,6 +123,8 @@ namespace cs2_osm_importer
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateTurnRestrictions]", "Default state for the turn restrictions toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParkingLots]", "Default: generate parking lots" },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParks]", "Default: generate parks" },
+            { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateLakes]", "Default: fill lakes" },
+            { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateLakes]", "Default state for the lakes toggle in the generate panel: fills OSM lakes, ponds and reservoirs with water at their shore height." },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParks]", "Default state for the parks toggle in the generate panel." },
             { $"Options.OPTION_DESCRIPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateParkingLots]", "Default state for the parking lots toggle in the generate panel." },
             { $"Options.OPTION[{Mod.Id}.{Mod.Id}.Mod.OsmImporterSettings.DefaultGenerateCrosswalks]", "Default: generate crosswalks" },

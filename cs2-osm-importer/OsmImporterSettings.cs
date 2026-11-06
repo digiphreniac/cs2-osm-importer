@@ -258,6 +258,9 @@ namespace cs2_osm_importer
         [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
         public bool DefaultGenerateParks { get; set; } = true;
 
+        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
+        public bool DefaultGenerateLakes { get; set; } = true;
+
         // Reset generate defaults button (rendered inline at the bottom of the generate defaults group)
         [SettingsUIButton]
         [SettingsUIConfirmation]
@@ -351,6 +354,7 @@ namespace cs2_osm_importer
             DefaultGenerateRestrictedLanes = true;
             DefaultGenerateParkingLots = true;
             DefaultGenerateParks = true;
+            DefaultGenerateLakes = true;
         }
 
         private static string GetDefaultOsmPath()

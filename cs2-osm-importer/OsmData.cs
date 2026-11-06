@@ -80,6 +80,10 @@ namespace cs2_osm_importer
         // attractiveness, maintenance) and trees in the woods mapped inside it (land value).
         public bool GenerateParks { get; set; } = true;
 
+        // Fill natural=water lakes, ponds and reservoirs with water sources at their shore height (the heightmap
+        // must have the lake bed below the shore).
+        public bool GenerateLakes { get; set; } = true;
+
         // Road segments queued per frame within a generation phase. 0 (default) = all in one frame, which avoids
         // CS2 merging new points into nodes from earlier frames (see OsmImportSystem.SegmentsPerFrameLimit).
         // Only lower it to spread a very large import over frames, at the cost of broken chains at batch boundaries.
@@ -117,6 +121,18 @@ namespace cs2_osm_importer
 
         // leisure=park outlines with the woods mapped inside them.
         public List<OsmParkArea> Parks { get; } = new List<OsmParkArea>();
+
+        // Lakes, ponds and reservoirs (natural=water that is not a river, stream or canal).
+        public List<OsmLake> Lakes { get; } = new List<OsmLake>();
+    }
+
+    internal sealed class OsmLake
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public List<float2> Ring { get; } = new List<float2>();
+        public List<List<float2>> Holes { get; } = new List<List<float2>>();
+        public float AreaSquareMeters { get; set; }
     }
 
     internal sealed class OsmParkArea

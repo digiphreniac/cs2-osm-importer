@@ -233,6 +233,7 @@ namespace cs2_osm_importer
         {
             LogPrefabCatalogOnce();
             UpdateGeometryReportRequests();
+            UpdateLakeFill();
 
             if (!IsImporting)
                 return;
@@ -322,6 +323,8 @@ namespace cs2_osm_importer
             _pendingDeleteEntities.AddRange(TakeGeneratedParkingLots());
             // Park grass, park buildings (with their own paths and areas) and park trees.
             _pendingDeleteEntities.AddRange(TakeGeneratedParks());
+            // Lake water sources (the water already there drains away once its sources are gone).
+            _pendingDeleteEntities.AddRange(TakeGeneratedLakes());
             _pendingDeleteIndex = 0;
             _deletedEdgeCount = 0;
             _deleteCompletionPending = false;
@@ -468,6 +471,9 @@ namespace cs2_osm_importer
                 _roadServiceUpgradesApplied = false;
                 ResetParkingLotState();
                 ResetParkState();
+                ResetLakeState();
+                // Lakes start filling now and rise slowly while the roads are built.
+                ProcessLakeStep();
                 StatusSummary = _totalGenerationWays > 0
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
@@ -795,6 +801,14 @@ namespace cs2_osm_importer
                     // Parks after parking lots: their buildings keep off the lots' aisles and garages.
                     if (ProcessParkStep())
                     {
+                        _applyWaitFrames = 0;
+                        return;
+                    }
+
+                    // Lakes were started with the generation; finish once they are full.
+                    if (LakesFilling)
+                    {
+                        StatusSummary = L("OsmImporter.Status.FillingLakes", "Filling lakes...");
                         _applyWaitFrames = 0;
                         return;
                     }

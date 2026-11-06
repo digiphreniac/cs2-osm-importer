@@ -50,6 +50,15 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   - Another network lies between the lot and the street at the entrance point, such as a separately mapped bike path
     (cycleway) or tram line. The lot's entrance links to that network instead of the street.
   - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
+- **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
+  constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
+  lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is
+  skipped, with a log line. Known case: Lake Union, Portage Bay and the Ship Canal sit at 0 m together with Puget Sound
+  in the Seattle heightmap, so they need the sea level set from the data, which the importer does not do yet. Water
+  bodies under 1000 m2 and rivers, streams and canals are not filled.
+- **Lakes take a few minutes to fill.** The water rises slowly while the roads are built (filling a deep basin all at
+  once sloshes over low spots of the shore), and the import finishes once the lakes are full. Deleting the generated
+  network removes the water sources; the water already there drains away on its own.
 
 ## How it works (for developers)
 

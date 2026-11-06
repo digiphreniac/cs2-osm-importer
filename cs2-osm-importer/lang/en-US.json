@@ -30,6 +30,7 @@
   "OsmImporter.Label.GenerateCrosswalks": "Crosswalks",
   "OsmImporter.Label.GenerateParkingLots": "Parking lots",
   "OsmImporter.Label.GenerateParks": "Parks",
+  "OsmImporter.Label.GenerateLakes": "Lakes",
   "OsmImporter.Label.GenerateRoads": "Generate Roads",
   "OsmImporter.Label.GenerateRestrictedLanes": "Restricted bus lanes",
   "OsmImporter.Label.GenerateStopSigns": "Stop signs",
