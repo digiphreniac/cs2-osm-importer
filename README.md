@@ -43,6 +43,38 @@ Choose which loaded road types to generate, then click **Generate Roads**.
 |:-------------------------------------------------------------------------------------------:|:----------------------------------------------------------------------------------------------:|
 |                                       1: Import Data                                        |                                       2: Generate Roads                                        |
 
+## Known issues
+
+- **Some parking lots are not connected to a street.** A small share of imported surface parking lots (under 3% in the
+  test areas) are built with their pavement and stalls, but cars cannot reach them. Known causes:
+  - Another network lies between the lot and the street at the entrance point, such as a separately mapped bike path
+    (cycleway) or tram line. The lot's entrance links to that network instead of the street.
+  - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
+- **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
+  constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
+  lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is
+  skipped, with a log line. Water bodies under 1000 m2 and rivers, streams and canals are not filled.
+- **Set the heightmap and the sea level before generating.** The importer does not set the sea level; it reads the
+  map's. A lake at or below it gets no water sources of its own: the sea fills it (in the Seattle heightmap, Lake
+  Union, Portage Bay and the Ship Canal sit at 0 m together with Puget Sound, so they only have water once the sea
+  level is set above 0). Pier decks and shore paths are placed at generation from the lake or sea level, whichever is
+  higher, so changing the sea level afterwards leaves them too low or too high.
+- **Raised shore paths add node offsets.** Paths along a lake shore that the heightmap's lake bed reaches under are
+  raised 1 m above the water. With a higher water level more of them are raised, and the connectivity scan reports
+  more nodes the game moved a few meters ("offset"): on the Lake Union test area 186 instead of 157 with the sea level
+  at 2 m instead of 0 m (overlapping and dead-end counts unchanged). Offsets are usually harmless, and the link to the
+  raised points is suspected, not confirmed.
+- **Lakes take a few minutes to fill.** The water rises slowly while the roads are built (filling a deep basin all at
+  once sloshes over low spots of the shore), and the import finishes once the lakes are full. Deleting the generated
+  network removes the water sources; the water already there drains away on its own.
+- **Piers are walkways, and a few marina joints stay open.** `man_made=pier` lines become footways on a deck 1 m above
+  the water. Pier areas get a walkway down their middle (their skeleton); shapes it cannot read are skipped, with a
+  log line. Pier ends near a path or another pier are joined to it. A pier with no path within 35 m (a swimming raft
+  out in the lake) is left out. A dock mapped twice (a line and an area, or two lines within 3.5 m) is built once. On
+  the Lake Union test area (about 400 piers), a few joints near piers still do not connect: two pier ends stop about
+  3 m short of a bike path, and a few short dead-end stubs sit where an added shore connector meets a sloped bank.
+  Where the lake has no water (see above), the piers stand over a dry bed.
+
 ## How it works (for developers)
 
 The mod follows CS2's **ECS pattern** with a custom `OsmImportDefinition` component and two systems:

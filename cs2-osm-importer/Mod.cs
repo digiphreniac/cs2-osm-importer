@@ -44,6 +44,7 @@ namespace cs2_osm_importer
             updateSystem.UpdateAt<OsmImporterUISystem>(SystemUpdatePhase.UIUpdate);
             updateSystem.UpdateAt<OsmImportToolSystem>(SystemUpdatePhase.ToolUpdate);
             updateSystem.UpdateAt<OsmImportSystem>(SystemUpdatePhase.ToolUpdate);
+            updateSystem.UpdateAt<OsmCityStartSystem>(SystemUpdatePhase.ToolUpdate); // before Modification: an Updated added later in the frame is cleared unseen
         }
 
         public void OnDispose()

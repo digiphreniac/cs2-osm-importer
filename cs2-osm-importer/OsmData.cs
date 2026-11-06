@@ -72,6 +72,18 @@ namespace cs2_osm_importer
         public bool GenerateTrafficLights { get; set; } = true;
         public bool GenerateRestrictedLanes { get; set; } = true;
 
+        // Build amenity=parking surface lots (pavement + aisles + working stalls) and skip the OSM parking aisles
+        // inside them, which the generated aisles replace.
+        public bool GenerateParkingLots { get; set; } = true;
+
+        // Build leisure=park areas: grass in the outline, vanilla park buildings along its streets (leisure,
+        // attractiveness, maintenance) and trees in the woods mapped inside it (land value).
+        public bool GenerateParks { get; set; } = true;
+
+        // Fill natural=water lakes, ponds and reservoirs with water sources at their shore height (the heightmap
+        // must have the lake bed below the shore).
+        public bool GenerateLakes { get; set; } = true;
+
         // Road segments queued per frame within a generation phase. 0 (default) = all in one frame, which avoids
         // CS2 merging new points into nodes from earlier frames (see OsmImportSystem.SegmentsPerFrameLimit).
         // Only lower it to spread a very large import over frames, at the cost of broken chains at batch boundaries.
@@ -103,6 +115,86 @@ namespace cs2_osm_importer
         // Projected XZ position (meters, scale applied) of every road node, before interpolation,
         // simplification or way merging. Used as ground truth by the geometry report.
         public Dictionary<long, float2> SourceNodePositions { get; } = new Dictionary<long, float2>();
+
+        // amenity=parking areas (closed ways and multipolygon outer rings), projected like the roads.
+        public List<OsmParkingArea> ParkingAreas { get; } = new List<OsmParkingArea>();
+
+        // leisure=park outlines with the woods mapped inside them.
+        public List<OsmParkArea> Parks { get; } = new List<OsmParkArea>();
+
+        // Lakes, ponds and reservoirs (natural=water that is not a river, stream or canal).
+        public List<OsmLake> Lakes { get; } = new List<OsmLake>();
+    }
+
+    internal sealed class OsmLake
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public List<float2> Ring { get; } = new List<float2>();
+        public List<List<float2>> Holes { get; } = new List<List<float2>>();
+        public float AreaSquareMeters { get; set; }
+    }
+
+    internal sealed class OsmParkArea
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+
+        // Outline in world XZ, counter-clockwise, without a repeated closing point. Holes are ignored.
+        public List<float2> Ring { get; } = new List<float2>();
+
+        // natural=wood / landuse=forest outlines lying inside the park.
+        public List<List<float2>> Woods { get; } = new List<List<float2>>();
+        public float AreaSquareMeters { get; set; }
+
+        // Public playgrounds and dog parks mapped inside the park (or, for a standalone dog park, the park itself).
+        public List<OsmParkFeature> Features { get; } = new List<OsmParkFeature>();
+
+        // Holes in the park's multipolygon and water mapped inside it (lakes, ponds): nothing is placed on them.
+        public List<List<float2>> Obstacles { get; } = new List<List<float2>>();
+
+        // A public dog park outside any park, built as a small park of its own (gets no other park buildings).
+        public bool IsStandaloneFeature { get; set; }
+    }
+
+    internal enum OsmParkFeatureKind
+    {
+        Playground = 0,
+        DogPark = 1,
+    }
+
+    internal sealed class OsmParkFeature
+    {
+        public long Id { get; set; }
+        public OsmParkFeatureKind Kind { get; set; }
+        public bool FromPoint { get; set; }
+        public float2 Center { get; set; }
+        public float AreaSquareMeters { get; set; }
+
+        // Mapped outline, or a square of the typical size for a feature mapped as a point.
+        public List<float2> Ring { get; } = new List<float2>();
+    }
+
+    internal enum OsmParkingKind
+    {
+        Surface = 0,
+        MultiStorey = 1,
+        Underground = 2,
+        Rooftop = 3,
+        StreetSide = 4,
+        Other = 5,
+    }
+
+    internal sealed class OsmParkingArea
+    {
+        public long Id { get; set; }
+        public bool FromRelation { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public OsmParkingKind Kind { get; set; }
+        public int Capacity { get; set; }
+
+        // Outline in world XZ (metres, scale applied), counter-clockwise, without a repeated closing point.
+        public List<float2> Ring { get; } = new List<float2>();
     }
 
     internal sealed class OsmWay
@@ -114,6 +206,10 @@ namespace cs2_osm_importer
         public string Footway { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
         public bool IsRoundabout { get; set; }
+
+        // service=parking_aisle lying inside an imported surface parking lot (replaced by the lot's own aisles).
+        public bool IsParkingAisle { get; set; }
+        public bool IsInsideParkingLot { get; set; }
 
         // Small roundabout built as a CS2 roundabout object on a single junction node instead of as a ring road.
         // The ring itself is not queued; connecting ways are extended to RoundaboutCenter (see OsmParser.ConvertRoundabouts).
@@ -127,6 +223,8 @@ namespace cs2_osm_importer
         public bool HasExplicitLaneCount { get; set; }
         public bool UsesStructuralElevation { get; set; }
         public bool IsBridge { get; set; }
+        // man_made=pier: a flat deck over the water; its height is set from the water level at generation.
+        public bool IsPier { get; set; }
         public bool IsTunnel { get; set; }
         public bool IsOneWay { get; set; }
         public int OneWayDirection { get; set; }

@@ -34,6 +34,7 @@ namespace cs2_osm_importer
             "tertiary_link",
             "footway",
             "steps",
+            "path",
             "bridleway",
             "monorail",
             "rail",
@@ -64,6 +65,7 @@ namespace cs2_osm_importer
                 { "secondary_link", new RoadTypeMetadata("OsmImporter.RoadType.SecondaryLink.Name", "Secondary link", "OsmImporter.RoadType.SecondaryLink.Description", "Connector between secondary roads and local streets.", "Media/Game/Icons/SmallRoad.svg") },
                 { "tertiary_link", new RoadTypeMetadata("OsmImporter.RoadType.TertiaryLink.Name", "Tertiary link", "OsmImporter.RoadType.TertiaryLink.Description", "Connector between tertiary roads and nearby local access.", "Media/Game/Icons/SmallRoadOneway1lane.svg") },
                 { "footway", new RoadTypeMetadata("OsmImporter.RoadType.Footway.Name", "Footway", "OsmImporter.RoadType.Footway.Description", "Path designed for pedestrians, often separate from the road network.", "Media/Game/Icons/Pathways.svg") },
+                { "path", new RoadTypeMetadata("OsmImporter.RoadType.Path.Name", "Path", "OsmImporter.RoadType.Path.Description", "Trails and multi-use paths (highway=path). Paved ones designated for bicycles are built as cycleways.", "Media/Game/Icons/Pathways.svg") },
                 { "steps", new RoadTypeMetadata("OsmImporter.RoadType.Steps.Name", "Steps", "OsmImporter.RoadType.Steps.Description", "Outdoor stairs for pedestrians, built as a pedestrian path (CS2 has no stairs).", "Media/Game/Icons/Pathways.svg") },
                 { "bridleway", new RoadTypeMetadata("OsmImporter.RoadType.Bridleway.Name", "Bridleway", "OsmImporter.RoadType.Bridleway.Description", "Path intended for horse riding, also open to pedestrians.", "Media/Game/Icons/Pathways.svg") },
                 { "monorail", new RoadTypeMetadata("OsmImporter.RoadType.Monorail.Name", "Monorail", "OsmImporter.RoadType.Monorail.Description", "Single-rail railway system for passenger transport.", "Media/Game/Icons/Train.svg") },
@@ -116,6 +118,9 @@ namespace cs2_osm_importer
             ("stopSigns", "OsmImporter.Label.GenerateStopSigns", "Stop signs"),
             ("trafficLights", "OsmImporter.Label.GenerateTrafficLights", "Traffic lights"),
             ("restrictedLanes", "OsmImporter.Label.GenerateRestrictedLanes", "Restricted bus lanes"),
+            ("parkingLots", "OsmImporter.Label.GenerateParkingLots", "Parking lots"),
+            ("parks", "OsmImporter.Label.GenerateParks", "Parks"),
+            ("lakes", "OsmImporter.Label.GenerateLakes", "Lakes"),
         };
 
         private string _lastRoadTypeCountsJson = string.Empty;
@@ -631,6 +636,9 @@ namespace cs2_osm_importer
                 GenerateStopSigns = IsRoadUpgradeSelected("stopSigns"),
                 GenerateTrafficLights = IsRoadUpgradeSelected("trafficLights"),
                 GenerateRestrictedLanes = IsRoadUpgradeSelected("restrictedLanes"),
+                GenerateParkingLots = IsRoadUpgradeSelected("parkingLots"),
+                GenerateParks = IsRoadUpgradeSelected("parks"),
+                GenerateLakes = IsRoadUpgradeSelected("lakes"),
             };
             foreach (var roadType in selectedTypes)
             {
@@ -748,6 +756,7 @@ namespace cs2_osm_importer
                 h = h * 31 + (s.DefaultImportTertiaryLink ? 1 : 0);
                 h = h * 31 + (s.DefaultImportFootway ? 1 : 0);
                 h = h * 31 + (s.DefaultImportSteps ? 1 : 0);
+                h = h * 31 + (s.DefaultImportPath ? 1 : 0);
                 h = h * 31 + (s.DefaultImportBridleway ? 1 : 0);
                 h = h * 31 + (s.DefaultImportMonorail ? 1 : 0);
                 h = h * 31 + (s.DefaultImportRail ? 1 : 0);
@@ -772,6 +781,9 @@ namespace cs2_osm_importer
                 h = h * 31 + (s.DefaultGenerateStopSigns ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateTrafficLights ? 1 : 0);
                 h = h * 31 + (s.DefaultGenerateRestrictedLanes ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateParkingLots ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateParks ? 1 : 0);
+                h = h * 31 + (s.DefaultGenerateLakes ? 1 : 0);
                 return h;
             }
         }
@@ -838,6 +850,7 @@ namespace cs2_osm_importer
                 case "tertiary_link": return settings.DefaultImportTertiaryLink;
                 case "footway": return settings.DefaultImportFootway;
                 case "steps": return settings.DefaultImportSteps;
+                case "path": return settings.DefaultImportPath;
                 case "bridleway": return settings.DefaultImportBridleway;
                 case "monorail": return settings.DefaultImportMonorail;
                 case "rail": return settings.DefaultImportRail;
@@ -862,6 +875,9 @@ namespace cs2_osm_importer
                 _roadUpgradeSelections["stopSigns"] = settings.DefaultGenerateStopSigns;
                 _roadUpgradeSelections["trafficLights"] = settings.DefaultGenerateTrafficLights;
                 _roadUpgradeSelections["restrictedLanes"] = settings.DefaultGenerateRestrictedLanes;
+                _roadUpgradeSelections["parkingLots"] = settings.DefaultGenerateParkingLots;
+                _roadUpgradeSelections["parks"] = settings.DefaultGenerateParks;
+                _roadUpgradeSelections["lakes"] = settings.DefaultGenerateLakes;
             }
             else
             {

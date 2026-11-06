@@ -8,7 +8,7 @@ using Unity.Mathematics;
 
 namespace cs2_osm_importer
 {
-    internal static class OsmParser
+    internal static partial class OsmParser
     {
         private const double EarthRadiusMeters = 6378137d;
         private const float MaxTerrainSegmentLengthMeters = 15f;
@@ -201,6 +201,9 @@ namespace cs2_osm_importer
                 }
             }
 
+            AddPierWays(xml, wayElements, nodes, supportedWays, roadNodeIds,
+                !options.UseImportHighwayTypesFilter || (options.ImportHighwayTypes != null && options.ImportHighwayTypes.Contains("footway")));
+
             if (roadNodeIds.Count == 0)
                 return document;
 
@@ -286,6 +289,9 @@ namespace cs2_osm_importer
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
+            ReadParkingAreas(xml, wayElements, nodes, roadNodeIds, document, options);
+            ReadParks(xml, wayElements, nodes, roadNodeIds, document, options);
+            MarkAislesInsideParkingLots(finalWays, document.ParkingAreas);
             finalWays = PrioritizeWays(finalWays, priorityRoadNames);
             document.Ways.AddRange(finalWays);
 
@@ -459,9 +465,12 @@ namespace cs2_osm_importer
         {
             way = new OsmWay { Id = ReadLong(wayElement, "id") };
             var isArea = false;
+            var pathSurface = string.Empty;
+            var pathBicycle = string.Empty;
             var hasLayer = false;
             var layer = 0;
             var isBridge = false;
+            var isPier = false;
             var isTunnel = false;
             var oneWayDirection = 0;
             var isCovered = false;
@@ -502,6 +511,12 @@ namespace cs2_osm_importer
                         way.Name = value;
                     else if (key == "ref")
                         way.Ref = value;
+                    else if (key == "service" && value == "parking_aisle")
+                        way.IsParkingAisle = true;
+                    else if (key == "surface")
+                        pathSurface = value;
+                    else if (key == "bicycle")
+                        pathBicycle = value;
                     else if (key == "lanes" && TryReadLaneCount(value, out var parsedLaneCount))
                     {
                         way.Lanes = parsedLaneCount;
@@ -521,6 +536,8 @@ namespace cs2_osm_importer
                     }
                     else if (key == "bridge")
                         isBridge = IsBridgeValue(value);
+                    else if (key == "man_made" && value == "pier")
+                        isPier = true;
                     else if (key == "tunnel")
                         isTunnel = IsTunnelValue(value);
                     else if (key == "oneway")
@@ -596,6 +613,11 @@ namespace cs2_osm_importer
                      IsElevatedRailType(wayRailway))
                 way.Highway = wayRailway;
 
+            // A paved path designated for bicycles is a cycleway in OSM terms; other paths (trails, unpaved or
+            // foot paths) stay "path" and use their own prefab rules.
+            if (way.Highway == "path" && pathBicycle == "designated" && IsPavedSurface(pathSurface))
+                way.Highway = "cycleway";
+
             if (isArea || string.IsNullOrEmpty(way.Highway) || !IsSupportedHighway(way.Highway))
                 return false;
 
@@ -625,6 +647,13 @@ namespace cs2_osm_importer
                 isCutting);
             way.UsesStructuralElevation = (isBridge || isTunnel || isEmbankment || isCutting) &&
                                           !IsElevatedRailType(way.Highway) && !IsElevatedRailType(wayRailway);
+            // A pier is a flat deck: no bridge offset, one height for the whole way (set at generation).
+            way.IsPier = isPier;
+            if (isPier)
+            {
+                way.UsesStructuralElevation = true;
+                way.BaseElevationOffsetMeters = 0f;
+            }
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
             // Only junction=roundabout/circular. A closed loop street (around a block, a cul-de-sac loop) is an ordinary road.
@@ -1021,6 +1050,7 @@ namespace cs2_osm_importer
                 case "bridleway":
                 case "footway":
                 case "steps":
+                case "path":
                 case "pedestrian":
                     return false;
                 default:
@@ -1784,6 +1814,7 @@ namespace cs2_osm_importer
                 HasExplicitLaneCount = way.HasExplicitLaneCount,
                 UsesStructuralElevation = way.UsesStructuralElevation,
                 IsBridge = way.IsBridge,
+                IsPier = way.IsPier,
                 IsTunnel = way.IsTunnel,
                 IsOneWay = way.IsOneWay,
                 OneWayDirection = way.OneWayDirection,
@@ -1798,7 +1829,8 @@ namespace cs2_osm_importer
                 HasRestrictedLanes = way.HasRestrictedLanes,
                 BikeLaneSide = way.BikeLaneSide,
                 RestrictedLaneSide = way.RestrictedLaneSide,
-                IsRoundabout = way.IsRoundabout
+                IsRoundabout = way.IsRoundabout,
+                IsParkingAisle = way.IsParkingAisle
             };
 
             if (reversed)
@@ -1848,6 +1880,7 @@ namespace cs2_osm_importer
                 HasExplicitLaneCount = ways[0].HasExplicitLaneCount,
                 UsesStructuralElevation = ways[0].UsesStructuralElevation,
                 IsBridge = ways[0].IsBridge,
+                IsPier = ways[0].IsPier,
                 IsTunnel = ways[0].IsTunnel,
                 IsOneWay = ways[0].IsOneWay,
                 OneWayDirection = ways[0].OneWayDirection,
@@ -1862,7 +1895,8 @@ namespace cs2_osm_importer
                 HasRestrictedLanes = ways[0].HasRestrictedLanes,
                 BikeLaneSide = ways[0].BikeLaneSide,
                 RestrictedLaneSide = ways[0].RestrictedLaneSide,
-                IsRoundabout = ways[0].IsRoundabout
+                IsRoundabout = ways[0].IsRoundabout,
+                IsParkingAisle = ways[0].IsParkingAisle
             };
 
             if (merged.Lanes <= 0)
@@ -2656,6 +2690,10 @@ namespace cs2_osm_importer
             if (a.IsRoundabout || b.IsRoundabout)
                 return false;
 
+            // Parking aisles may be replaced by a generated lot; keep them apart from driveways and streets.
+            if (a.IsParkingAisle != b.IsParkingAisle)
+                return false;
+
             if (!ApproximatelyEqual(a.BaseElevationOffsetMeters, b.BaseElevationOffsetMeters))
                 return false;
 
@@ -3099,6 +3137,7 @@ namespace cs2_osm_importer
                 case "tertiary_link":
                 case "footway":
                 case "steps":
+                case "path":
                 case "bridleway":
                 case "monorail":
                 case "rail":
@@ -3363,6 +3402,10 @@ namespace cs2_osm_importer
         }
 
         // bridge=yes/viaduct/boardwalk/movable/cantilever/trestle/... all mean a bridge (IsTruthy only accepted yes/true/1).
+        private static bool IsPavedSurface(string surface) =>
+            string.IsNullOrEmpty(surface) || surface == "asphalt" || surface == "paved" || surface == "concrete" ||
+            surface == "paving_stones" || surface == "concrete:plates" || surface == "sett" || surface == "bricks";
+
         private static bool IsBridgeValue(string value) =>
             !string.IsNullOrWhiteSpace(value) && !IsFalsey(value);
 

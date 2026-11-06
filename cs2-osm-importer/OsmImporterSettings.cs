@@ -151,6 +151,9 @@ namespace cs2_osm_importer
         public bool DefaultImportSteps { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
+        public bool DefaultImportPath { get; set; } = true;
+
+        [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
         public bool DefaultImportBridleway { get; set; } = true;
 
         [SettingsUISection(DEFAULTS, DEFAULTS_IMPORT)]
@@ -249,6 +252,15 @@ namespace cs2_osm_importer
         [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
         public bool DefaultGenerateRestrictedLanes { get; set; } = true;
 
+        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
+        public bool DefaultGenerateParkingLots { get; set; } = true;
+
+        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
+        public bool DefaultGenerateParks { get; set; } = true;
+
+        [SettingsUISection(DEFAULTS, DEFAULTS_GENERATE)]
+        public bool DefaultGenerateLakes { get; set; } = true;
+
         // Reset generate defaults button (rendered inline at the bottom of the generate defaults group)
         [SettingsUIButton]
         [SettingsUIConfirmation]
@@ -305,6 +317,7 @@ namespace cs2_osm_importer
             DefaultImportTertiaryLink = true;
             DefaultImportFootway = true;
             DefaultImportSteps = true;
+            DefaultImportPath = true;
             DefaultImportBridleway = true;
             DefaultImportMonorail = true;
             DefaultImportRail = true;
@@ -339,6 +352,9 @@ namespace cs2_osm_importer
             DefaultGenerateStopSigns = true;
             DefaultGenerateTrafficLights = true;
             DefaultGenerateRestrictedLanes = true;
+            DefaultGenerateParkingLots = true;
+            DefaultGenerateParks = true;
+            DefaultGenerateLakes = true;
         }
 
         private static string GetDefaultOsmPath()
