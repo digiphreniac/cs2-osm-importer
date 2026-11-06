@@ -53,9 +53,17 @@ Choose which loaded road types to generate, then click **Generate Roads**.
 - **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
   constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
   lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is
-  skipped, with a log line. Known case: Lake Union, Portage Bay and the Ship Canal sit at 0 m together with Puget Sound
-  in the Seattle heightmap, so they need the sea level set from the data, which the importer does not do yet. Water
-  bodies under 1000 m2 and rivers, streams and canals are not filled.
+  skipped, with a log line. Water bodies under 1000 m2 and rivers, streams and canals are not filled.
+- **Set the heightmap and the sea level before generating.** The importer does not set the sea level; it reads the
+  map's. A lake at or below it gets no water sources of its own: the sea fills it (in the Seattle heightmap, Lake
+  Union, Portage Bay and the Ship Canal sit at 0 m together with Puget Sound, so they only have water once the sea
+  level is set above 0). Pier decks and shore paths are placed at generation from the lake or sea level, whichever is
+  higher, so changing the sea level afterwards leaves them too low or too high.
+- **Raised shore paths add node offsets.** Paths along a lake shore that the heightmap's lake bed reaches under are
+  raised 1 m above the water. With a higher water level more of them are raised, and the connectivity scan reports
+  more nodes the game moved a few meters ("offset"): on the Lake Union test area 186 instead of 157 with the sea level
+  at 2 m instead of 0 m (overlapping and dead-end counts unchanged). Offsets are usually harmless, and the link to the
+  raised points is suspected, not confirmed.
 - **Lakes take a few minutes to fill.** The water rises slowly while the roads are built (filling a deep basin all at
   once sloshes over low spots of the shore), and the import finishes once the lakes are full. Deleting the generated
   network removes the water sources; the water already there drains away on its own.

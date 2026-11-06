@@ -108,11 +108,18 @@ namespace cs2_osm_importer
             return false;
         }
 
+        // The map's sea level, set by the player with the heightmap. A lake at or below it is filled by the sea
+        // (Lake Union and the Ship Canal sit at 0 m with Puget Sound in the Seattle heightmap): no sources of its own,
+        // and the piers and shore paths there go by the sea level.
+        private float MapSeaLevel => World.GetExistingSystemManaged<WaterSystem>()?.SeaLevel ?? 0f;
+        private const float LakeAboveSeaMargin = 0.2f;
+
         private const float PierDeckAboveWater = 1f;
         private const float PierLakeReach = 50f;
 
         /// <summary>
-        /// Pier decks: 1 m above the water they stand in (the level of the lake around them, else the sea level);
+        /// Pier decks: 1 m above the water they stand in (the level of the lake around them, or the sea level when that
+        /// is higher; away from lakes, the sea level);
         /// where a pier (or its added shore connector) is over land, it follows the ground.
         /// </summary>
         private void SetPierDeckHeights()
@@ -121,16 +128,21 @@ namespace cs2_osm_importer
                 return;
             var piers = _document.Ways.Where(w => w.IsPier && w.Points.Count >= 2).ToList();
             var fillLakes = _activeGenerateOptions?.GenerateLakes ?? false;
-            if (piers.Count == 0 && !fillLakes)
-                return;
             CacheTerrainHeightData();
+            var sea = MapSeaLevel;
+            // Water level per lake: its own level, or the sea's where the sea is higher. Shore paths are raised along
+            // the lakes the importer fills and along those the sea fills (that water is there either way).
             var levels = new List<(OsmLake Lake, float Level)>();
+            var shoreLevels = new List<(OsmLake Lake, float Level)>();
             foreach (var lake in _document.Lakes)
             {
-                if (lake.AreaSquareMeters >= LakeMinSquareMeters && TryLakeLevel(lake, out var level, out _))
-                    levels.Add((lake, level));
+                if (lake.AreaSquareMeters < LakeMinSquareMeters || !TryLakeLevel(lake, out var level, out _))
+                    continue;
+                var water = math.max(level, sea);
+                levels.Add((lake, water));
+                if (fillLakes || level <= sea + LakeAboveSeaMargin)
+                    shoreLevels.Add((lake, water));
             }
-            var sea = World.GetExistingSystemManaged<WaterSystem>()?.SeaLevel ?? 0f;
             int onLakes = 0, onSea = 0;
             // Heights of the other ways' points: where a pier joins a path or street it takes that point's height
             // (a fresh terrain sample differs from the parser's smoothed profile by a few decimeters, and CS2 then
@@ -203,8 +215,7 @@ namespace cs2_osm_importer
                 }
             }
 
-            if (fillLakes)
-                RaiseShoreWays(levels);
+            RaiseShoreWays(shoreLevels);
         }
 
         private static (int, int) PointKey(float3 p) => ((int)math.round(p.x * 20f), (int)math.round(p.z * 20f));
@@ -258,8 +269,9 @@ namespace cs2_osm_importer
         private void QueueLakes()
         {
             CacheTerrainHeightData();
-            int filled = 0, small = 0, flat = 0, sources = 0, lowShore = 0;
+            int filled = 0, small = 0, flat = 0, sources = 0, lowShore = 0, bySea = 0;
             var filledLakes = new List<(OsmLake Lake, float Level)>();
+            var sea = MapSeaLevel;
             foreach (var lake in _document.Lakes)
             {
                 if (lake.AreaSquareMeters < LakeMinSquareMeters)
@@ -271,6 +283,14 @@ namespace cs2_osm_importer
                 if (!TryLakeLevel(lake, out var level, out var hasLowSpot))
                 {
                     flat++;
+                    continue;
+                }
+                if (level <= sea + LakeAboveSeaMargin)
+                {
+                    // The sea fills it: no sources of its own (they would hold it at the wrong level); still clear the
+                    // map's trees out of it.
+                    bySea++;
+                    filledLakes.Add((lake, sea));
                     continue;
                 }
                 if (hasLowSpot)
@@ -289,7 +309,7 @@ namespace cs2_osm_importer
             }
 
             var trees = RemoveTreesInLakes(filledLakes);
-            Mod.log.Info($"Lakes: {filled} filling with {sources} water sources ({trees} map trees in them removed); skipped {small} under {LakeMinSquareMeters:F0} m2 and {flat} without a lake bed below their shore in the heightmap" +
+            Mod.log.Info($"Lakes: {filled} filling with {sources} water sources, {bySea} at or below the map's sea level {sea:F1} m left to the sea ({trees} map trees in them removed); skipped {small} under {LakeMinSquareMeters:F0} m2 and {flat} without a lake bed below their shore in the heightmap" +
                          (lowShore > 0 ? $"; {lowShore} have a low spot on the shore (outlet or cut), kept to the usual shore height there." : "."));
         }
 
