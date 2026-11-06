@@ -107,8 +107,6 @@ namespace cs2_osm_importer
                                 QueueParkingStall(_pendingStalls[_pendingStallIndex]);
                             return true;
                         }
-                        if (_parkingWaitFrames % 60 == 1)
-                            LogPendingDefinitions("parking", _parkingDefinitions, _parkingWaitFrames);
                         if (CountPendingParkingDefinitions() > 0 && _parkingWaitFrames < MaxApplyWaitFrames)
                             return true;
                         Mod.log.Info($"Parking definitions applied after {_parkingWaitFrames} frames ({CountPendingParkingDefinitions()} still pending).");
@@ -169,12 +167,6 @@ namespace cs2_osm_importer
                     Mod.log.Info($"Parking lot {area.Id} at ({c0.x:F0}, {c0.y:F0}): no entrance street within {ParkingEntranceSearchMeters} m; nearest road of any kind {streets.NearestAnyRoadGap(ring):F1} m.");
                 }
                 var plan = ParkingLotLayout.Plan(ring, entranceInside, streetPoint, streetApproach, streets.IsNearStreet, streets.IsInStreetConnectRange);
-                if (streetPoint.HasValue && plan.Stalls.Count > 0)
-                {
-                    var c1 = ParkingGeometry.Centroid(ring);
-                    var ee = streets.LastEntranceEdge;
-                    Mod.log.Info($"DIAG parking lot {area.Id} at ({c1.x:F1}, {c1.y:F1}): entrance to edge {ee.Index}:{ee.Version} ({(ee == Entity.Null ? "?" : _prefabSystem.GetPrefabName(EntityManager.GetComponentData<PrefabRef>(ee).m_Prefab))}) at ({streetPoint.Value.x:F1}, {streetPoint.Value.y:F1}), approach ({streetApproach.x:F1}, {streetApproach.y:F1}).");
-                }
                 if (plan.Stalls.Count == 0 && !string.IsNullOrEmpty(plan.SkipReason))
                     skipped[plan.SkipReason] = skipped.TryGetValue(plan.SkipReason, out var c) ? c + 1 : 1;
 
@@ -325,21 +317,6 @@ namespace cs2_osm_importer
                         count++;
                     }
             return count;
-        }
-
-        // DIAG: which definition kinds are still waiting for the game.
-        private void LogPendingDefinitions(string label, List<Entity> definitions, int frames)
-        {
-            int net = 0, obj = 0, area = 0, owned = 0;
-            foreach (var e in definitions)
-            {
-                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<CreationDefinition>(e)) continue;
-                if (EntityManager.HasComponent<NetCourse>(e)) net++;
-                else if (EntityManager.HasComponent<Game.Tools.ObjectDefinition>(e)) obj++;
-                else area++;
-                if (EntityManager.HasComponent<OwnerDefinition>(e)) owned++;
-            }
-            Mod.log.Info($"DIAG {label} pending after {frames} frames: {net} courses, {obj} objects, {area} areas ({owned} with an owner definition).");
         }
 
         private float3 Lift(float2 p) => new float3(p.x, SampleTerrainHeight(new float3(p.x, 0f, p.y)), p.y);
@@ -724,7 +701,6 @@ namespace cs2_osm_importer
             /// Nearest entrance street to the outline: insidePoint is 1.5 m inside the outline where the lot is closest to
             /// that street, outsidePoint is just beyond the street's edge on the lot's side (where the path ends).
             /// </summary>
-            public Entity LastEntranceEdge;
 
             /// <summary>
             /// For a building: the side of the rectangle closest to a street with car lanes (front = that side's outward
@@ -819,7 +795,6 @@ namespace cs2_osm_importer
                 }
                 if (best > reach)
                     return false;
-                LastEntranceEdge = bestEdge.Edge;
 
                 var centroid = ParkingGeometry.Centroid(ring);
                 var square = new float2(-bestEdge.Dir.y, bestEdge.Dir.x);

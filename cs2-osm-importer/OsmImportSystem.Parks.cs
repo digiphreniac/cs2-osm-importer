@@ -132,8 +132,6 @@ namespace cs2_osm_importer
 
                     case ParkStep.WaitingForApply:
                         _parkWaitFrames++;
-                        if (_parkWaitFrames % 60 == 1)
-                            LogPendingDefinitions("parks", _parkDefinitions, _parkWaitFrames);
                         if (_parkDefinitions.Any(e => EntityManager.Exists(e) && EntityManager.HasComponent<CreationDefinition>(e)) && _parkWaitFrames < MaxApplyWaitFrames)
                             return true;
                         TrackGeneratedParks();
@@ -335,85 +333,8 @@ namespace cs2_osm_importer
                     continue;
                 }
                 _featuresSkipped++;
-                LogSkippedFeature(park, feature, bySize, streets, paths, footprints);
             }
             return placed;
-        }
-
-        /// <summary>
-        /// DIAG: why a mapped playground / dog park got no building. Counts, over every 4 m spot along the outline, how
-        /// far the nearest street-side spot is and what rules out the spots within reach.
-        /// </summary>
-        private void LogSkippedFeature(OsmParkArea park, OsmParkFeature feature, List<(Entity Prefab, float2 Size)> bySize, ParkingStreetIndex streets, ParkNetIndex paths, List<(float2 Center, float2 Front, float2 Size)> footprints)
-        {
-            var ring = park.Ring;
-            var bounds = park.IsStandaloneFeature ? Expanded(park.Ring, 15f) : park.Ring;
-            float nearestStreetSpot = float.MaxValue, nearestAnySpot = float.MaxValue;
-            int spots = 0, outside = 0, onStreet = 0, onPath = 0, overlap = 0, nonEntrance = 0;
-            var smallest = bySize.OrderBy(p => p.Size.x * p.Size.y).First();
-            for (var i = 0; i < ring.Count; i++)
-            {
-                var a = ring[i];
-                var b = ring[(i + 1) % ring.Count];
-                var length = math.distance(a, b);
-                if (length < 1f)
-                    continue;
-                var dir = (b - a) / length;
-                var front = new float2(dir.y, -dir.x);
-                for (var s = 2f; s <= length - 2f; s += 4f)
-                {
-                    var p = a + dir * s;
-                    var d = math.distance(p, feature.Center);
-                    nearestAnySpot = math.min(nearestAnySpot, d);
-                    if (streets.EntranceRoadGap(p) > ParkFrontReach)
-                        continue;
-                    nearestStreetSpot = math.min(nearestStreetSpot, d);
-                    if (d > ParkFeatureMaxMove)
-                        continue;
-                    spots++;
-                    if (streets.NonEntranceRoadNear(p, 8.4f)) { nonEntrance++; continue; }
-                    var center = p - front * (smallest.Size.y * 0.5f + 0.5f);
-                    switch (FootprintProblem(bounds, center, front, smallest.Size, streets, paths, footprints))
-                    {
-                        case 1: outside++; break;
-                        case 2: onStreet++; break;
-                        case 3: onPath++; break;
-                        case 4: overlap++; break;
-                    }
-                }
-            }
-            var name = string.IsNullOrEmpty(park.Name) ? $"park {park.Id}" : park.Name;
-            Mod.log.Info($"DIAG {feature.Kind} {feature.Id} in {name} ({feature.AreaSquareMeters:F0} m2, {park.AreaSquareMeters / 10000f:F1} ha park) not built: " +
-                         $"nearest outline spot {nearestAnySpot:F0} m, nearest street-side spot {(nearestStreetSpot == float.MaxValue ? "none" : nearestStreetSpot.ToString("F0") + " m")}; " +
-                         $"{spots} street-side spots within {ParkFeatureMaxMove:F0} m, smallest {_prefabSystem.GetPrefabName(smallest.Prefab)} ({smallest.Size.x:F0}x{smallest.Size.y:F0} m) ruled out by: " +
-                         $"outside the park {outside}, on a street {onStreet}, on a footpath {onPath}, overlapping a placed building {overlap}, pedestrian street/highway in reach {nonEntrance}.");
-        }
-
-        /// <summary>0 = fits; 1 outside the outline, 2 on a street, 3 on a path, 4 overlapping a placed footprint.</summary>
-        private static int FootprintProblem(List<float2> ring, float2 center, float2 front, float2 size, ParkingStreetIndex streets, ParkNetIndex paths, List<(float2 Center, float2 Front, float2 Size)> placed)
-        {
-            var side = new float2(front.y, -front.x);
-            for (var w = -size.x * 0.5f; w <= size.x * 0.5f + 0.01f; w += math.max(1f, math.min(3f, size.x * 0.5f)))
-            for (var d = -size.y * 0.5f; d <= size.y * 0.5f + 0.01f; d += math.max(1f, math.min(3f, size.y * 0.5f)))
-            {
-                var p = center + side * w + front * d;
-                if (!ParkingGeometry.Contains(ring, p) && ParkingGeometry.DistanceToRing(ring, p) > 1f)
-                    return 1;
-                if (OnObstacle(p, ParkWaterMargin))
-                    return 1;
-                if (streets.IsNearStreet(p))
-                    return 2;
-                if (paths.IsNear(p, 0.5f))
-                    return 3;
-                foreach (var o in placed)
-                {
-                    var rel = p - o.Center;
-                    var oSide = new float2(o.Front.y, -o.Front.x);
-                    if (math.abs(math.dot(rel, oSide)) < o.Size.x * 0.5f + 1f && math.abs(math.dot(rel, o.Front)) < o.Size.y * 0.5f + 1f)
-                        return 4;
-                }
-            }
-            return 0;
         }
 
         private static List<float2> Expanded(List<float2> ring, float by)
