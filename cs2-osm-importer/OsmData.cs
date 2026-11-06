@@ -134,6 +134,9 @@ namespace cs2_osm_importer
         // Public playgrounds and dog parks mapped inside the park (or, for a standalone dog park, the park itself).
         public List<OsmParkFeature> Features { get; } = new List<OsmParkFeature>();
 
+        // Holes in the park's multipolygon and water mapped inside it (lakes, ponds): nothing is placed on them.
+        public List<List<float2>> Obstacles { get; } = new List<List<float2>>();
+
         // A public dog park outside any park, built as a small park of its own (gets no other park buildings).
         public bool IsStandaloneFeature { get; set; }
     }

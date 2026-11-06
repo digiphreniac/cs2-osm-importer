@@ -10,6 +10,12 @@ namespace cs2_osm_importer
     {
         private const float MinParkSquareMeters = 50f;
 
+        private static bool IsWater(Dictionary<string, string> tags) =>
+            (tags.TryGetValue("natural", out var natural) && (natural == "water" || natural == "wetland")) ||
+            (tags.TryGetValue("water", out _) && !tags.ContainsKey("highway")) ||
+            (tags.TryGetValue("landuse", out var landuse) && (landuse == "reservoir" || landuse == "basin")) ||
+            (tags.TryGetValue("leisure", out var leisure) && leisure == "swimming_pool");
+
         /// <summary>
         /// Reads leisure=park outlines (closed ways and multipolygon outer rings) and the natural=wood /
         /// landuse=forest outlines inside them. Individual OSM trees are deliberately not read (not reliable).
@@ -61,7 +67,9 @@ namespace cs2_osm_importer
                 return wayById;
             }
 
-            void Take(long id, Dictionary<string, string> tags, List<List<long>> rings)
+            var waters = new List<List<float2>>();
+
+            void Take(long id, Dictionary<string, string> tags, List<List<long>> rings, List<List<long>> holes = null)
             {
                 var isPark = tags.TryGetValue("leisure", out var leisure) && leisure == "park";
                 var isWood = (tags.TryGetValue("natural", out var natural) && natural == "wood") ||
@@ -88,6 +96,12 @@ namespace cs2_osm_importer
                         AreaSquareMeters = area,
                     };
                     park.Ring.AddRange(ring);
+                    foreach (var hole in holes ?? new List<List<long>>())
+                    {
+                        var h = Ring(hole);
+                        if (h != null && ParkingGeometry.Contains(ring, ParkingGeometry.Centroid(h)))
+                            park.Obstacles.Add(h);
+                    }
                     document.Parks.Add(park);
                 }
             }
@@ -99,6 +113,12 @@ namespace cs2_osm_importer
                 if (ids.Count < 4 || ids[0] != ids[ids.Count - 1])
                     continue;
                 Take(ReadLong(wayElement, "id"), tags, new List<List<long>> { ids });
+                if (IsWater(tags))
+                {
+                    var w = Ring(ids);
+                    if (w != null)
+                        waters.Add(w);
+                }
             }
 
             var relations = xml.SelectNodes("/osm/relation");
@@ -109,19 +129,32 @@ namespace cs2_osm_importer
                     var tags = ReadTags(relation);
                     if (!tags.TryGetValue("type", out var type) || type != "multipolygon")
                         continue;
-                    if (!(tags.TryGetValue("leisure", out var l) && l == "park") &&
+                    var water = IsWater(tags);
+                    if (!water &&
+                        !(tags.TryGetValue("leisure", out var l) && l == "park") &&
                         !(tags.TryGetValue("natural", out var n) && n == "wood") &&
                         !(tags.TryGetValue("landuse", out var lu) && lu == "forest"))
                         continue;
                     var outerParts = new List<List<long>>();
+                    var innerParts = new List<List<long>>();
                     foreach (XmlElement member in relation.SelectNodes("member"))
                     {
-                        if (member.GetAttribute("type") != "way" || member.GetAttribute("role") == "inner")
+                        if (member.GetAttribute("type") != "way")
                             continue;
                         if (WayById().TryGetValue(ReadLong(member, "ref"), out var memberWay))
-                            outerParts.Add(ReadNodeRefs(memberWay));
+                            (member.GetAttribute("role") == "inner" ? innerParts : outerParts).Add(ReadNodeRefs(memberWay));
                     }
-                    Take(ReadLong(relation, "id"), tags, AssembleRings(outerParts));
+                    if (water)
+                    {
+                        foreach (var ids in AssembleRings(outerParts))
+                        {
+                            var w = Ring(ids);
+                            if (w != null)
+                                waters.Add(w);
+                        }
+                        continue;
+                    }
+                    Take(ReadLong(relation, "id"), tags, AssembleRings(outerParts), AssembleRings(innerParts));
                 }
             }
 
@@ -137,10 +170,24 @@ namespace cs2_osm_importer
                 attached++;
             }
 
+            var waterInParks = 0;
+            foreach (var w in waters)
+            {
+                var c = ParkingGeometry.Centroid(w);
+                foreach (var park in document.Parks)
+                {
+                    if (ParkingGeometry.Contains(park.Ring, c) || w.Any(p => ParkingGeometry.Contains(park.Ring, p)))
+                    {
+                        park.Obstacles.Add(w);
+                        waterInParks++;
+                    }
+                }
+            }
+
             ReadParkFeatures(wayElements, nodes, document, Ring, Position);
 
             if (document.Parks.Count > 0)
-                Mod.log.Info($"Read {document.Parks.Count} OSM parks ({document.Parks.Count(p => p.AreaSquareMeters >= 40000f)} of 4 ha or more) with {attached} wooded areas inside them.");
+                Mod.log.Info($"Read {document.Parks.Count} OSM parks ({document.Parks.Count(p => p.AreaSquareMeters >= 40000f)} of 4 ha or more) with {attached} wooded areas and {waterInParks} water areas or holes inside them ({document.Parks.Sum(p => p.Obstacles.Count)} kept clear).");
         }
 
         // Typical sizes (Seattle medians) for a playground or dog park mapped as a point.

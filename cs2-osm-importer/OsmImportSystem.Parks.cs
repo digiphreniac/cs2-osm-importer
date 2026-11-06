@@ -68,6 +68,20 @@ namespace cs2_osm_importer
         private readonly List<Entity> _parkTreePrefabs = new List<Entity>();
         private int _queuedParkBuildings, _queuedParkSurfaces;
 
+        // Water and holes of the park being placed: buildings and trees keep ParkWaterMargin clear of them.
+        private static List<List<float2>> _currentParkObstacles = new List<List<float2>>();
+        private const float ParkWaterMargin = 3f;
+
+        private static bool OnObstacle(float2 p, float margin)
+        {
+            foreach (var o in _currentParkObstacles)
+            {
+                if (ParkingGeometry.Contains(o, p) || ParkingGeometry.DistanceToRing(o, p) < margin)
+                    return true;
+            }
+            return false;
+        }
+
         private void ResetParkState()
         {
             _parkStep = ParkStep.NotStarted;
@@ -182,6 +196,7 @@ namespace cs2_osm_importer
             foreach (var park in _document.Parks)
             {
                 QueueParkSurface(park.Ring);
+                _currentParkObstacles = park.Obstacles;
                 var footprints = new List<(float2 Center, float2 Front, float2 Size)>();
                 var features = PlaceParkFeatures(park, streets, paths, footprints, ref random);
                 var placed = features + PlaceParkBuildings(park, streets, paths, footprints, ref random, features);
@@ -384,6 +399,8 @@ namespace cs2_osm_importer
                 var p = center + side * w + front * d;
                 if (!ParkingGeometry.Contains(ring, p) && ParkingGeometry.DistanceToRing(ring, p) > 1f)
                     return 1;
+                if (OnObstacle(p, ParkWaterMargin))
+                    return 1;
                 if (streets.IsNearStreet(p))
                     return 2;
                 if (paths.IsNear(p, 0.5f))
@@ -516,6 +533,8 @@ namespace cs2_osm_importer
                 var p = center + side * w + front * d;
                 if (!ParkingGeometry.Contains(ring, p) && ParkingGeometry.DistanceToRing(ring, p) > 1f)
                     return false;
+                if (OnObstacle(p, ParkWaterMargin))
+                    return false;
                 if (streets.IsNearStreet(p) || paths.IsNear(p, 0.5f))
                     return false;
                 foreach (var o in placed)
@@ -543,7 +562,7 @@ namespace cs2_osm_importer
                     if (_pendingParkTrees.Count >= ParkMaxTrees)
                         return;
                     var p = new float2(x, z) + random.NextFloat2(-0.35f, 0.35f) * ParkTreeSpacing;
-                    if (!ParkingGeometry.Contains(wood, p) || !ParkingGeometry.Contains(park.Ring, p))
+                    if (!ParkingGeometry.Contains(wood, p) || !ParkingGeometry.Contains(park.Ring, p) || OnObstacle(p, 1f))
                         continue;
                     if (streets.IsNearStreet(p) || paths.IsNear(p, 2.5f))
                         continue;
