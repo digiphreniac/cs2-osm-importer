@@ -2515,7 +2515,29 @@ namespace cs2_osm_importer
             }
             var crosswalksDroppedNearJunction = 0;
             foreach (var road in roads)
+            {
+                // Kept aside: generation uses them to pick which junction leg keeps CS2's crosswalk at minor junctions.
+                road.JunctionCrossings.AddRange(road.Crosswalks.Where(c => NearJunction(c.Position.xz)));
                 crosswalksDroppedNearJunction += road.Crosswalks.RemoveAll(c => NearJunction(c.Position.xz));
+            }
+
+            // OSM often maps several crossings a few metres apart over one road: a straight one plus diagonals from a
+            // stair landing to each kerb (three within 6 m at Volunteer Park's entrance), or one for each of two paths
+            // meeting the road side by side. Each became its own crosswalk, a row of stripes. Keep one per
+            // CrosswalkMergeMeters of road (never across a junction) and lead the others' paths to it.
+            var junctionKeys = new HashSet<(int, int)>(junctionPoints.Select(PointKey));
+            var mergedInto = new Dictionary<float3, float3>();
+            var crosswalksMerged = 0;
+            foreach (var road in roads)
+                crosswalksMerged += MergeCloseCrosswalks(road, junctionKeys, mergedInto);
+            if (mergedInto.Count > 0)
+            {
+                foreach (var kerb in kerbToRoadPoint.Keys.ToList())
+                {
+                    if (mergedInto.TryGetValue(kerbToRoadPoint[kerb], out var kept))
+                        kerbToRoadPoint[kerb] = kept;
+                }
+            }
 
             // Real paths that ended on a dropped detail: extend them onto the road.
             var snappedToCrossing = 0;
@@ -2568,9 +2590,81 @@ namespace cs2_osm_importer
             }
 
             Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
-                         $"{crosswalksAdded} crosswalk upgrades added from crossing ways, {crosswalksDroppedNearJunction} dropped near junctions; " +
+                         $"{crosswalksAdded} crosswalk upgrades added from crossing ways, {crosswalksDroppedNearJunction} dropped near junctions, " +
+                         $"{crosswalksMerged} merged into a crosswalk within {CrosswalkMergeMeters:F0} m; " +
                          $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
             return ways.Where(w => !detailSet.Contains(w)).ToList();
+        }
+
+        // Crosswalks closer than this along one road (with no junction between them) become one.
+        private const float CrosswalkMergeMeters = 20f;
+
+        private static (int, int) PointKey(float2 p) => ((int)math.round(p.x * 100f), (int)math.round(p.y * 100f));
+
+        /// <summary>
+        /// Groups the road's crosswalks along the road into runs no longer than CrosswalkMergeMeters with no junction
+        /// point inside, keeps the one nearest each run's middle and records where the others went. Returns how many
+        /// were dropped.
+        /// </summary>
+        private static int MergeCloseCrosswalks(OsmWay road, HashSet<(int, int)> junctionKeys, Dictionary<float3, float3> mergedInto)
+        {
+            if (road.Crosswalks.Count < 2)
+                return 0;
+            var points = road.Points;
+            var along = new float[points.Count];
+            for (var i = 1; i < points.Count; i++)
+                along[i] = along[i - 1] + math.distance(points[i - 1].xz, points[i].xz);
+
+            var items = new List<(OsmRoadNodeFeature Feature, int Index)>();
+            foreach (var c in road.Crosswalks)
+            {
+                var index = points.FindIndex(p => math.distance(p.xz, c.Position.xz) < 0.01f);
+                if (index >= 0)
+                    items.Add((c, index));
+            }
+            if (items.Count < 2)
+                return 0;
+            items.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+            bool JunctionBetween(int from, int to)
+            {
+                for (var k = from + 1; k < to; k++)
+                {
+                    if (junctionKeys.Contains(PointKey(points[k].xz)))
+                        return true;
+                }
+                return false;
+            }
+
+            var dropped = new HashSet<OsmRoadNodeFeature>();
+            for (var start = 0; start < items.Count;)
+            {
+                var end = start + 1;
+                while (end < items.Count &&
+                       along[items[end].Index] - along[items[start].Index] <= CrosswalkMergeMeters &&
+                       !JunctionBetween(items[end - 1].Index, items[end].Index))
+                    end++;
+                if (end - start > 1)
+                {
+                    var middle = (along[items[start].Index] + along[items[end - 1].Index]) * 0.5f;
+                    var keep = start;
+                    for (var k = start + 1; k < end; k++)
+                    {
+                        if (math.abs(along[items[k].Index] - middle) < math.abs(along[items[keep].Index] - middle))
+                            keep = k;
+                    }
+                    for (var k = start; k < end; k++)
+                    {
+                        if (k == keep)
+                            continue;
+                        dropped.Add(items[k].Feature);
+                        mergedInto[items[k].Feature.Position] = items[keep].Feature.Position;
+                    }
+                }
+                start = end;
+            }
+            road.Crosswalks.RemoveAll(dropped.Contains);
+            return dropped.Count;
         }
 
         private static bool IsPathLike(OsmWay way)

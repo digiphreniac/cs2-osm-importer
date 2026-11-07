@@ -2284,8 +2284,203 @@ namespace cs2_osm_importer
                 ApplyNodeRoadServiceUpgrades(way, edge.m_End, nodeLookup[edge.m_End].m_Position, touchedNodes, chunkEntities, ref upgradedNodes);
             }
 
+            if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateCrosswalks)
+                TrimMinorJunctionCrosswalks(chunkEntities);
+
             MarkChunksDirty(chunkEntities);
             Mod.log.Info($"Applied road service upgrade flags to {upgradedEdges} generated edges and {upgradedNodes} generated nodes.");
+        }
+
+        // A mapped OSM crossing this close to a junction belongs to one of its legs.
+        private const float JunctionCrossingMeters = 12f;
+
+        private static bool IsMinorJunctionRoad(string highway)
+        {
+            switch ((highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "unclassified":
+                case "service":
+                case "living_street":
+                case "track":
+                case "road":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private struct JunctionLeg
+        {
+            public Entity Edge;
+            public bool AtStart;
+            public OsmWay Way;
+            public float2 Direction;
+            public bool IsPath;
+        }
+
+        /// <summary>
+        /// CS2 draws a crosswalk over every road leg of a junction, and a path joining a road is a junction too. In
+        /// parks that piles up: Volunteer Park's entrance had a road junction and two footpaths joining within 8 m,
+        /// so seven rows of stripes. At minor junctions (a path joining a road, or only unclassified/service/
+        /// living_street/track roads meeting) a leg keeps its crosswalk only when OSM maps a crossing on it; each
+        /// mapped crossing keeps one leg, the nearest. Junctions of ordinary city streets are left as CS2 draws them.
+        /// The leg's crosswalk is removed with its edge's Upgraded RemoveCrosswalk on the side of that end (m_Left at
+        /// the start node, m_Right at the end node; checked with the bridge's set_upgraded).
+        /// </summary>
+        private void TrimMinorJunctionCrosswalks(HashSet<Entity> chunkEntities)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var edgeLookup = GetComponentLookup<Edge>(true);
+            var curveLookup = GetComponentLookup<Curve>(true);
+            var nodeLookup = GetComponentLookup<Node>(true);
+            var connectedLookup = GetBufferLookup<ConnectedEdge>(true);
+
+            // Junction nodes of generated edges, with their legs.
+            var junctions = new Dictionary<Entity, List<JunctionLeg>>();
+            var skippedUnknown = 0;
+            var seen = new HashSet<Entity>();
+            foreach (var edgeEntity in _generatedEdgeWays.Keys)
+            {
+                if (!edgeLookup.HasComponent(edgeEntity))
+                    continue;
+                var e = edgeLookup[edgeEntity];
+                foreach (var node in new[] { e.m_Start, e.m_End })
+                {
+                    if (!seen.Add(node) || !nodeLookup.HasComponent(node) || !connectedLookup.HasBuffer(node))
+                        continue;
+                    var connected = connectedLookup[node];
+                    if (connected.Length < 3)
+                        continue;
+                    var legs = new List<JunctionLeg>(connected.Length);
+                    var unknown = false;
+                    for (var i = 0; i < connected.Length; i++)
+                    {
+                        var legEdge = connected[i].m_Edge;
+                        if (!edgeLookup.HasComponent(legEdge) || !curveLookup.HasComponent(legEdge))
+                            continue;
+                        var le = edgeLookup[legEdge];
+                        if (le.m_Start != node && le.m_End != node)
+                            continue; // attached to the middle of the edge, not a leg
+                        if (!_generatedEdgeWays.TryGetValue(legEdge, out var way) || way == null)
+                        {
+                            unknown = true;
+                            break;
+                        }
+                        var curve = curveLookup[legEdge].m_Bezier;
+                        var atStart = le.m_Start == node;
+                        var dir = atStart ? curve.b.xz - curve.a.xz : curve.c.xz - curve.d.xz;
+                        if (math.lengthsq(dir) < 1e-4f)
+                            dir = atStart ? curve.d.xz - curve.a.xz : curve.a.xz - curve.d.xz;
+                        legs.Add(new JunctionLeg
+                        {
+                            Edge = legEdge,
+                            AtStart = atStart,
+                            Way = way,
+                            Direction = math.normalizesafe(dir),
+                            IsPath = IsPathLikeHighwayType(way.Highway)
+                        });
+                    }
+                    if (unknown)
+                    {
+                        skippedUnknown++;
+                        continue;
+                    }
+                    if (legs.Count >= 3 && legs.Any(l => !l.IsPath))
+                        junctions[node] = legs;
+                }
+            }
+
+            // Every mapped crossing keeps the crosswalk of the nearest junction leg of its own road that points at it.
+            var grid = new Dictionary<(int, int), List<Entity>>();
+            (int, int) Cell(float2 p) => ((int)math.floor(p.x / 16f), (int)math.floor(p.y / 16f));
+            foreach (var node in junctions.Keys)
+            {
+                var key = Cell(nodeLookup[node].m_Position.xz);
+                if (!grid.TryGetValue(key, out var cell))
+                    grid[key] = cell = new List<Entity>();
+                cell.Add(node);
+            }
+            var kept = new HashSet<(Entity, bool)>();
+            var crossingsUsed = 0;
+            var ways = new HashSet<OsmWay>(_generatedEdgeWays.Values.Where(w => w != null));
+            foreach (var way in ways)
+            {
+                foreach (var crossing in way.JunctionCrossings.Concat(way.Crosswalks))
+                {
+                    var p = crossing.Position.xz;
+                    var c = Cell(p);
+                    var bestDist = float.MaxValue;
+                    var bestAlign = -1f;
+                    JunctionLeg? best = null;
+                    for (var dx = -1; dx <= 1; dx++)
+                        for (var dz = -1; dz <= 1; dz++)
+                        {
+                            if (!grid.TryGetValue((c.Item1 + dx, c.Item2 + dz), out var cell))
+                                continue;
+                            foreach (var node in cell)
+                            {
+                                var offset = p - nodeLookup[node].m_Position.xz;
+                                var dist = math.length(offset);
+                                if (dist > JunctionCrossingMeters)
+                                    continue;
+                                foreach (var leg in junctions[node])
+                                {
+                                    if (leg.IsPath || leg.Way != way)
+                                        continue;
+                                    // At the node itself any leg will do; further out, the leg must point at it.
+                                    var align = dist < 1.5f ? 1f : math.dot(offset / dist, leg.Direction);
+                                    if (align < 0.7f)
+                                        continue;
+                                    if (dist < bestDist - 0.5f || (math.abs(dist - bestDist) <= 0.5f && align > bestAlign))
+                                    {
+                                        bestDist = dist;
+                                        bestAlign = align;
+                                        best = leg;
+                                    }
+                                }
+                            }
+                        }
+                    if (best.HasValue)
+                    {
+                        kept.Add((best.Value.Edge, best.Value.AtStart));
+                        crossingsUsed++;
+                    }
+                }
+            }
+
+            var minorJunctions = 0;
+            var legsCleared = 0;
+            foreach (var pair in junctions)
+            {
+                var legs = pair.Value;
+                var roadLegs = legs.Where(l => !l.IsPath).ToList();
+                var pathJoin = roadLegs.Count <= 2;
+                if (!pathJoin && !roadLegs.All(l => IsMinorJunctionRoad(l.Way.Highway)))
+                    continue;
+                minorJunctions++;
+                foreach (var leg in roadLegs)
+                {
+                    if (kept.Contains((leg.Edge, leg.AtStart)))
+                        continue;
+                    var flags = default(CompositionFlags);
+                    if (leg.AtStart)
+                        flags.m_Left = CompositionFlags.Side.RemoveCrosswalk;
+                    else
+                        flags.m_Right = CompositionFlags.Side.RemoveCrosswalk;
+                    if (MergeUpgradedFlags(leg.Edge, flags))
+                    {
+                        legsCleared++;
+                        chunkEntities.Add(leg.Edge);
+                    }
+                }
+                if (!EntityManager.HasComponent<Updated>(pair.Key))
+                    EntityManager.AddComponent<Updated>(pair.Key);
+            }
+
+            Mod.log.Info($"Crosswalks at minor junctions: {legsCleared} legs cleared at {minorJunctions} junctions " +
+                         $"(path joins or only minor roads), {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
+                         $"{junctions.Count} junctions checked, {skippedUnknown} skipped (leg of an unknown way); " +
+                         $"{clock.Elapsed.TotalSeconds:F2} s.");
         }
 
         private void ApplyNodeRoadServiceUpgrades(

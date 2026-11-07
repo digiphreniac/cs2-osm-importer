@@ -250,6 +250,9 @@ namespace cs2_osm_importer
         public List<float> TerrainHeights { get; } = new List<float>();
         public List<float3> Points { get; } = new List<float3>();
         public List<OsmRoadNodeFeature> Crosswalks { get; } = new List<OsmRoadNodeFeature>();
+        // OSM crossings within a few metres of a junction: not upgrades of their own (the junction draws crosswalks),
+        // but they say which of the junction's legs has a real crossing.
+        public List<OsmRoadNodeFeature> JunctionCrossings { get; } = new List<OsmRoadNodeFeature>();
         public List<OsmRoadNodeFeature> StopSigns { get; } = new List<OsmRoadNodeFeature>();
         public List<OsmRoadNodeFeature> TrafficLights { get; } = new List<OsmRoadNodeFeature>();
         public List<OsmTurnRestriction> TurnRestrictions { get; } = new List<OsmTurnRestriction>();
