@@ -212,6 +212,8 @@ namespace cs2_osm_importer
         public string Highway { get; set; } = string.Empty;
         public string Footway { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
+        // A crossing way tagged crossing=unmarked/informal/no or crossing:markings=no.
+        public bool IsUnmarkedCrossing { get; set; }
         public bool IsRoundabout { get; set; }
 
         // service=parking_aisle lying inside an imported surface parking lot (replaced by the lot's own aisles).

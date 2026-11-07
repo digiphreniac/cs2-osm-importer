@@ -298,7 +298,8 @@ namespace cs2_osm_importer
             timer.Mark("harmonize");
             ConvertRoundabouts(finalWays, sampleHeight);
             timer.Mark("roundabouts");
-            finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions);
+            finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions,
+                id => nodes.TryGetValue(id, out var n) && IsUnmarkedCrossingNode(n.Tags));
             timer.Mark("pedestrianDetails");
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
@@ -786,6 +787,8 @@ namespace cs2_osm_importer
                         wayRailway = value;
                     else if (key == "footway")
                         footwayType = value;
+                    else if ((key == "crossing" || key == "crossing:markings") && IsUnmarkedCrossingTag(key, value))
+                        way.IsUnmarkedCrossing = true;
                     else if (key == "sidewalk")
                         sidewalkTag = value;
                     else if (key == "sidewalk:left")
@@ -1658,13 +1661,28 @@ namespace cs2_osm_importer
 
         private static bool IsCrosswalkNode(Dictionary<string, string> tags)
         {
-            if (tags == null)
+            if (tags == null || IsUnmarkedCrossingNode(tags))
                 return false;
 
             return HasTag(tags, "highway", "crossing") ||
                    HasTag(tags, "footway", "crossing") ||
                    HasTag(tags, "crossing") ||
                    HasTag(tags, "crossing:markings");
+        }
+
+        // crossing=unmarked/informal/no or crossing:markings=no: people cross there, but nothing is painted. A CS2
+        // crosswalk is painted stripes, so these get none.
+        private static bool IsUnmarkedCrossingTag(string key, string value)
+        {
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            return key == "crossing:markings" ? value == "no" : value == "unmarked" || value == "informal" || value == "no";
+        }
+
+        private static bool IsUnmarkedCrossingNode(Dictionary<string, string> tags)
+        {
+            return tags != null &&
+                   ((tags.TryGetValue("crossing", out var c) && IsUnmarkedCrossingTag("crossing", c)) ||
+                    (tags.TryGetValue("crossing:markings", out var m) && IsUnmarkedCrossingTag("crossing:markings", m)));
         }
 
         private static bool IsStopSignNode(Dictionary<string, string> tags)
@@ -2432,7 +2450,8 @@ namespace cs2_osm_importer
         ///   crossing's road node when they ended on its kerb (so both sides meet one node and CS2 draws the
         ///   crosswalk), otherwise to the nearest road point within PathToRoadSnapMeters.
         /// </summary>
-        private static List<OsmWay> ReplaceMappedPedestrianDetails(List<OsmWay> ways, Dictionary<long, float2> sourcePositions)
+        private static List<OsmWay> ReplaceMappedPedestrianDetails(List<OsmWay> ways, Dictionary<long, float2> sourcePositions,
+            Func<long, bool> isUnmarkedCrossingNode = null)
         {
             var details = ways.Where(IsPedestrianDetailFootway).ToList();
             if (details.Count == 0)
@@ -2467,6 +2486,7 @@ namespace cs2_osm_importer
             // Crossing ways: their road node becomes a crosswalk; their kerb nodes lead to that road node.
             var kerbToRoadPoint = new Dictionary<long, float3>();
             var crosswalksAdded = 0;
+            var crosswalksUnmarked = 0;
             foreach (var crossing in details.Where(d => string.Equals(d.Footway, "crossing", StringComparison.OrdinalIgnoreCase)))
             {
                 foreach (var id in crossing.NodeIds)
@@ -2479,7 +2499,10 @@ namespace cs2_osm_importer
                     var point = RoadPointAt(road, id);
                     if (point == null)
                         continue;
-                    if (!road.Crosswalks.Any(c => c.NodeId == id))
+                    var unmarked = crossing.IsUnmarkedCrossing || (isUnmarkedCrossingNode != null && isUnmarkedCrossingNode(id));
+                    if (unmarked)
+                        crosswalksUnmarked++;
+                    else if (!road.Crosswalks.Any(c => c.NodeId == id))
                     {
                         road.Crosswalks.Add(new OsmRoadNodeFeature { NodeId = id, Position = point.Value });
                         crosswalksAdded++;
@@ -2590,7 +2613,7 @@ namespace cs2_osm_importer
             }
 
             Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
-                         $"{crosswalksAdded} crosswalk upgrades added from crossing ways, {crosswalksDroppedNearJunction} dropped near junctions, " +
+                         $"{crosswalksAdded} crosswalk upgrades added from crossing ways ({crosswalksUnmarked} unmarked skipped), {crosswalksDroppedNearJunction} dropped near junctions, " +
                          $"{crosswalksMerged} merged into a crosswalk within {CrosswalkMergeMeters:F0} m; " +
                          $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
             return ways.Where(w => !detailSet.Contains(w)).ToList();

@@ -2255,6 +2255,34 @@ namespace cs2_osm_importer
             var chunkEntities = new HashSet<Entity>();
             var touchedNodes = new HashSet<Entity>();
 
+            // Each mapped crossing marks the one node nearest to it. Marking every node within 6 m drew two or three
+            // rows of stripes wherever the game had short edges there (a 2 m edge on Denny Way, two ways meeting at
+            // the crossing on Delmar Drive East).
+            var nearestCrosswalkNode = new Dictionary<(int, int), (Entity Node, float DistSq)>();
+            foreach (var pair in _generatedEdgeWays)
+            {
+                var way = pair.Value;
+                if (way == null || way.Crosswalks.Count == 0 || !edgeLookup.HasComponent(pair.Key))
+                    continue;
+                var edge = edgeLookup[pair.Key];
+                foreach (var node in new[] { edge.m_Start, edge.m_End })
+                {
+                    if (!nodeLookup.HasComponent(node))
+                        continue;
+                    var p = nodeLookup[node].m_Position.xz;
+                    foreach (var feature in way.Crosswalks)
+                    {
+                        var d = math.distancesq(feature.Position.xz, p);
+                        if (d > 36f)
+                            continue;
+                        var key = ((int)math.round(feature.Position.x * 100f), (int)math.round(feature.Position.z * 100f));
+                        if (!nearestCrosswalkNode.TryGetValue(key, out var best) || d < best.DistSq)
+                            nearestCrosswalkNode[key] = (node, d);
+                    }
+                }
+            }
+            _crosswalkNodes = new HashSet<Entity>(nearestCrosswalkNode.Values.Select(v => v.Node));
+
             foreach (var pair in _generatedEdgeWays)
             {
                 var edgeEntity = pair.Key;
@@ -2291,8 +2319,13 @@ namespace cs2_osm_importer
             Mod.log.Info($"Applied road service upgrade flags to {upgradedEdges} generated edges and {upgradedNodes} generated nodes.");
         }
 
+        // Nodes that carry a mapped crossing's crosswalk upgrade (the nearest node to each crossing).
+        private HashSet<Entity> _crosswalkNodes;
+
         // A mapped OSM crossing this close to a junction belongs to one of its legs.
         private const float JunctionCrossingMeters = 12f;
+        // CS2 draws no junction crosswalk on a leg shorter than about this.
+        private const float MinCrosswalkLegMeters = 5f;
 
         private static bool IsMinorJunctionRoad(string highway)
         {
@@ -2309,6 +2342,19 @@ namespace cs2_osm_importer
             }
         }
 
+        private static bool IsSideRoad(string highway)
+        {
+            switch ((highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "service":
+                case "living_street":
+                case "track":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private struct JunctionLeg
         {
             public Entity Edge;
@@ -2316,13 +2362,16 @@ namespace cs2_osm_importer
             public OsmWay Way;
             public float2 Direction;
             public bool IsPath;
+            public float Length;
+            public bool NoSidewalk;
         }
 
         /// <summary>
         /// CS2 draws a crosswalk over every road leg of a junction, and a path joining a road is a junction too. In
         /// parks that piles up: Volunteer Park's entrance had a road junction and two footpaths joining within 8 m,
-        /// so seven rows of stripes. At minor junctions (a path joining a road, or only unclassified/service/
-        /// living_street/track roads meeting) a leg keeps its crosswalk only when OSM maps a crossing on it; each
+        /// so seven rows of stripes. At minor junctions (a path joining a road; an alley, driveway, track or road
+        /// without sidewalks meeting anything, since alley mouths and driveways got two crosswalks over the street;
+        /// or only unclassified/service roads meeting) a leg keeps its crosswalk only when OSM maps a crossing on it; each
         /// mapped crossing keeps one leg, the nearest. Junctions of ordinary city streets are left as CS2 draws them.
         /// The leg's crosswalk is removed with its edge's Upgraded RemoveCrosswalk on the side of that end (m_Left at
         /// the start node, m_Right at the end node; checked with the bridge's set_upgraded).
@@ -2334,6 +2383,19 @@ namespace cs2_osm_importer
             var curveLookup = GetComponentLookup<Curve>(true);
             var nodeLookup = GetComponentLookup<Node>(true);
             var connectedLookup = GetBufferLookup<ConnectedEdge>(true);
+            var compositionLookup = GetComponentLookup<Composition>(true);
+            var compositionDataLookup = GetComponentLookup<NetCompositionData>(true);
+
+            bool HasNoSidewalk(Entity edge, bool atStart)
+            {
+                if (!compositionLookup.HasComponent(edge))
+                    return false;
+                var c = atStart ? compositionLookup[edge].m_StartNode : compositionLookup[edge].m_EndNode; // the edge composition carries no Sidewalk flag
+                if (!compositionDataLookup.HasComponent(c))
+                    return false;
+                var f = compositionDataLookup[c].m_Flags;
+                return ((f.m_Left | f.m_Right) & (CompositionFlags.Side.Sidewalk | CompositionFlags.Side.WideSidewalk)) == 0;
+            }
 
             // Junction nodes of generated edges, with their legs.
             var junctions = new Dictionary<Entity, List<JunctionLeg>>();
@@ -2377,7 +2439,9 @@ namespace cs2_osm_importer
                             AtStart = atStart,
                             Way = way,
                             Direction = math.normalizesafe(dir),
-                            IsPath = IsPathLikeHighwayType(way.Highway)
+                            IsPath = IsPathLikeHighwayType(way.Highway),
+                            Length = curveLookup[legEdge].m_Length,
+                            NoSidewalk = HasNoSidewalk(legEdge, atStart)
                         });
                     }
                     if (unknown)
@@ -2400,67 +2464,129 @@ namespace cs2_osm_importer
                     grid[key] = cell = new List<Entity>();
                 cell.Add(node);
             }
-            var kept = new HashSet<(Entity, bool)>();
+            var kept = new Dictionary<(Entity, bool), float>(); // leg -> distance to its nearest crossing
             var crossingsUsed = 0;
-            var ways = new HashSet<OsmWay>(_generatedEdgeWays.Values.Where(w => w != null));
-            foreach (var way in ways)
+            // One entry per crossing: a crossing where the road is split into two OSM ways is on both, and kept a leg
+            // for each (a trail crossing a road still drew a crosswalk on both sides of it).
+            var crossings = new Dictionary<(int, int), (float2 P, HashSet<OsmWay> Ways)>();
+            foreach (var way in new HashSet<OsmWay>(_generatedEdgeWays.Values.Where(w => w != null)))
             {
-                foreach (var crossing in way.JunctionCrossings.Concat(way.Crosswalks))
+                foreach (var feature in way.JunctionCrossings.Concat(way.Crosswalks))
                 {
-                    var p = crossing.Position.xz;
-                    var c = Cell(p);
-                    var bestDist = float.MaxValue;
-                    var bestAlign = -1f;
-                    JunctionLeg? best = null;
-                    for (var dx = -1; dx <= 1; dx++)
-                        for (var dz = -1; dz <= 1; dz++)
+                    var key = ((int)math.round(feature.Position.x * 100f), (int)math.round(feature.Position.z * 100f));
+                    if (!crossings.TryGetValue(key, out var entry))
+                        crossings[key] = entry = (feature.Position.xz, new HashSet<OsmWay>());
+                    entry.Ways.Add(way);
+                }
+            }
+            foreach (var crossing in crossings.Values)
+            {
+                var p = crossing.P;
+                var c = Cell(p);
+                var bestDist = float.MaxValue;
+                var bestAlign = -1f;
+                JunctionLeg? best = null;
+                var bestNode = Entity.Null;
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                    {
+                        if (!grid.TryGetValue((c.Item1 + dx, c.Item2 + dz), out var cell))
+                            continue;
+                        foreach (var node in cell)
                         {
-                            if (!grid.TryGetValue((c.Item1 + dx, c.Item2 + dz), out var cell))
+                            var offset = p - nodeLookup[node].m_Position.xz;
+                            var dist = math.length(offset);
+                            if (dist > JunctionCrossingMeters)
                                 continue;
-                            foreach (var node in cell)
+                            foreach (var leg in junctions[node])
                             {
-                                var offset = p - nodeLookup[node].m_Position.xz;
-                                var dist = math.length(offset);
-                                if (dist > JunctionCrossingMeters)
+                                if (leg.IsPath || !crossing.Ways.Contains(leg.Way))
                                     continue;
-                                foreach (var leg in junctions[node])
+                                // At the node itself any leg will do; further out, the leg must point at it.
+                                var align = dist < 1.5f ? 1f : math.dot(offset / dist, leg.Direction);
+                                if (align < 0.7f)
+                                    continue;
+                                // Equally good legs (a crossing on the node itself): the longer one. CS2 draws no
+                                // crosswalk on a few-metre edge between two close junctions, so keeping that one
+                                // lost the crossing (the marked crossing on the Volunteer Park ring).
+                                if (dist < bestDist - 0.5f || (math.abs(dist - bestDist) <= 0.5f &&
+                                    (align > bestAlign + 0.01f || (align >= bestAlign - 0.01f && leg.Length > best.Value.Length))))
                                 {
-                                    if (leg.IsPath || leg.Way != way)
-                                        continue;
-                                    // At the node itself any leg will do; further out, the leg must point at it.
-                                    var align = dist < 1.5f ? 1f : math.dot(offset / dist, leg.Direction);
-                                    if (align < 0.7f)
-                                        continue;
-                                    if (dist < bestDist - 0.5f || (math.abs(dist - bestDist) <= 0.5f && align > bestAlign))
-                                    {
-                                        bestDist = dist;
-                                        bestAlign = align;
-                                        best = leg;
-                                    }
+                                    bestDist = dist;
+                                    bestAlign = align;
+                                    best = leg;
+                                    bestNode = node;
                                 }
                             }
                         }
-                    if (best.HasValue)
-                    {
-                        kept.Add((best.Value.Edge, best.Value.AtStart));
-                        crossingsUsed++;
                     }
+                // CS2 draws no crosswalk on an edge of a few metres between two close junctions: hand the crossing
+                // to the road's continuation on the other side of the node (the marked crossing on the Volunteer
+                // Park ring lies on a 3.4 m piece between two path joins and was lost).
+                if (best.HasValue && best.Value.Length < MinCrosswalkLegMeters)
+                {
+                    var from = best.Value;
+                    JunctionLeg? across = null;
+                    foreach (var leg in junctions[bestNode])
+                    {
+                        if (leg.IsPath || leg.Edge == from.Edge || leg.Length < MinCrosswalkLegMeters)
+                            continue;
+                        if (math.dot(leg.Direction, from.Direction) > -0.5f)
+                            continue; // not the continuation
+                        if (!across.HasValue || math.dot(leg.Direction, from.Direction) < math.dot(across.Value.Direction, from.Direction))
+                            across = leg;
+                    }
+                    if (across.HasValue)
+                        best = across;
+                }
+                if (best.HasValue)
+                {
+                    var legKey = (best.Value.Edge, best.Value.AtStart);
+                    if (!kept.TryGetValue(legKey, out var keptDist) || bestDist < keptDist)
+                        kept[legKey] = bestDist;
+                    crossingsUsed++;
                 }
             }
 
             var minorJunctions = 0;
             var legsCleared = 0;
+            var nodeCrosswalksCleared = 0;
+            var crampedLeftAlone = 0;
             foreach (var pair in junctions)
             {
                 var legs = pair.Value;
                 var roadLegs = legs.Where(l => !l.IsPath).ToList();
                 var pathJoin = roadLegs.Count <= 2;
-                if (!pathJoin && !roadLegs.All(l => IsMinorJunctionRoad(l.Way.Highway)))
+                // Minor: a path joining a road; an alley, driveway, track or a road without sidewalks meeting
+                // anything; or only minor roads meeting (unclassified alone is not enough: plenty of ordinary
+                // Seattle streets are unclassified, and those intersections lost their crosswalks).
+                var minor = pathJoin ||
+                            roadLegs.Any(l => l.NoSidewalk || IsSideRoad(l.Way.Highway)) ||
+                            roadLegs.All(l => IsMinorJunctionRoad(l.Way.Highway));
+                if (!minor)
                     continue;
                 minorJunctions++;
+                // A path join keeps at most one crosswalk, on the leg nearest a crossing. A driveway with one crossing
+                // for the cycleway and another for the sidewalk 6 m away kept both.
+                var keepHere = new HashSet<(Entity, bool)>(roadLegs.Select(l => (l.Edge, l.AtStart)).Where(kept.ContainsKey));
+                if (pathJoin && keepHere.Count > 1)
+                {
+                    var nearest = keepHere.OrderBy(k => kept[k]).First();
+                    keepHere.Clear();
+                    keepHere.Add(nearest);
+                }
+                // A mapped crossing whose legs are all too short for CS2 to draw on (path joins a few metres apart
+                // near a junction, the marked crossing on the Volunteer Park ring): trimming would lose it, so the
+                // junction stays as it was, with the importer's node crosswalk.
+                if (keepHere.Count > 0 &&
+                    roadLegs.Where(l => keepHere.Contains((l.Edge, l.AtStart))).All(l => l.Length < MinCrosswalkLegMeters))
+                {
+                    crampedLeftAlone++;
+                    continue;
+                }
                 foreach (var leg in roadLegs)
                 {
-                    if (kept.Contains((leg.Edge, leg.AtStart)))
+                    if (keepHere.Contains((leg.Edge, leg.AtStart)))
                         continue;
                     var flags = default(CompositionFlags);
                     if (leg.AtStart)
@@ -2473,12 +2599,31 @@ namespace cs2_osm_importer
                         chunkEntities.Add(leg.Edge);
                     }
                 }
+                // A crossing mapped on the junction node got the node's own crosswalk upgrade above, and that one
+                // outranks the legs' RemoveCrosswalk (380 path joins kept both legs' stripes). The leg kept for the
+                // crossing draws it.
+                if (EntityManager.HasComponent<Upgraded>(pair.Key))
+                {
+                    var nodeFlags = EntityManager.GetComponentData<Upgraded>(pair.Key).m_Flags;
+                    if ((nodeFlags.m_General & CompositionFlags.General.Crosswalk) != 0 ||
+                        ((nodeFlags.m_Left | nodeFlags.m_Right) & CompositionFlags.Side.AddCrosswalk) != 0)
+                    {
+                        nodeFlags.m_General &= ~CompositionFlags.General.Crosswalk;
+                        nodeFlags.m_Left &= ~CompositionFlags.Side.AddCrosswalk;
+                        nodeFlags.m_Right &= ~CompositionFlags.Side.AddCrosswalk;
+                        if (HasAnyFlags(nodeFlags))
+                            EntityManager.SetComponentData(pair.Key, new Upgraded { m_Flags = nodeFlags });
+                        else
+                            EntityManager.RemoveComponent<Upgraded>(pair.Key);
+                        nodeCrosswalksCleared++;
+                    }
+                }
                 if (!EntityManager.HasComponent<Updated>(pair.Key))
                     EntityManager.AddComponent<Updated>(pair.Key);
             }
 
             Mod.log.Info($"Crosswalks at minor junctions: {legsCleared} legs cleared at {minorJunctions} junctions " +
-                         $"(path joins or only minor roads), {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
+                         $"(path joins or only minor roads), {nodeCrosswalksCleared} node crosswalks moved to a leg, {crampedLeftAlone} left alone (legs too short to draw on), {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
                          $"{junctions.Count} junctions checked, {skippedUnknown} skipped (leg of an unknown way); " +
                          $"{clock.Elapsed.TotalSeconds:F2} s.");
         }
@@ -2497,7 +2642,7 @@ namespace cs2_osm_importer
             var flags = default(CompositionFlags);
 
             if ((_activeGenerateOptions == null || _activeGenerateOptions.GenerateCrosswalks) &&
-                HasNearbyNodeFeature(way.Crosswalks, nodePosition, 6f))
+                _crosswalkNodes != null && _crosswalkNodes.Contains(nodeEntity))
             {
                 flags.m_General |= CompositionFlags.General.Crosswalk;
                 flags.m_Left |= CompositionFlags.Side.AddCrosswalk;
