@@ -50,6 +50,9 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   - Another network lies between the lot and the street at the entrance point, such as a separately mapped bike path
     (cycleway) or tram line. The lot's entrance links to that network instead of the street.
   - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
+- **Roads can overlap railways.** In places where an OSM road crosses or runs beside a rail line (several Seattle light
+  rail and tram corridors), the built road lies on top of the tracks instead of crossing them cleanly, and CS2 then
+  draws a pile of overlapping crosswalks there. Cause not yet investigated.
 - **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
   constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
   lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is
