@@ -256,10 +256,12 @@ namespace cs2_osm_importer
             if (!tracking)
             {
                 _frameStatsWindow.Reset();
+                _timelineLastStart = 0;
                 return;
             }
 
             var importerMs = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            LogTimeline(started, importerMs);
             if (!_frameStatsWindow.IsRunning)
             {
                 _frameStatsWindow.Restart();
@@ -281,6 +283,56 @@ namespace cs2_osm_importer
             _frameStatsFrames = 0;
             _frameStatsImporterMs = 0;
             _frameStatsImporterMaxMs = 0;
+        }
+
+        // Timeline: a line whenever the work moves to another step, and for every frame where the game (between our
+        // updates) or the importer took long, so a slow import shows where its time went.
+        private string _timelineStep;
+        private long _timelineLastStart;
+        private double _timelineLastImporterMs;
+        private const double SlowGameFrameMs = 2000, SlowImporterFrameMs = 1000;
+
+        private string TimelineStep()
+        {
+            if (!IsImporting)
+                return LakesFilling ? "lakes filling" : "idle";
+            var step = $"{_phase}";
+            if (_phase == WorkPhase.WaitForGameApply)
+            {
+                step += $"/{_applyWaitPurpose}";
+                if (_applyWaitPurpose == ApplyWaitPurpose.AfterRoads)
+                {
+                    step += _generationReadyLogged ? " ready"
+                        : _parkStep != ParkStep.NotStarted ? $" parks {_parkStep}"
+                        : _parkingStep != ParkingStep.NotStarted ? $" parking {_parkingStep}"
+                        : _roadNamesApplied ? " names applied"
+                        : _nodeRoundaboutsRefreshed ? " roundabouts refreshed"
+                        : _nodeRoundaboutsPlaced ? " roundabouts placed"
+                        : " roads";
+                }
+            }
+            return step;
+        }
+
+        private void LogTimeline(long started, double importerMs)
+        {
+            var at = _generationClock.IsRunning ? $"{_generationClock.Elapsed.TotalSeconds:F1} s" : "-";
+            if (_timelineLastStart != 0)
+            {
+                var gameMs = (started - _timelineLastStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency - _timelineLastImporterMs;
+                if (gameMs > SlowGameFrameMs)
+                    Mod.log.Info($"Timeline: slow game frame {gameMs / 1000.0:F1} s before this update (step {_timelineStep}, at {at}).");
+            }
+            if (importerMs > SlowImporterFrameMs)
+                Mod.log.Info($"Timeline: slow importer frame {importerMs / 1000.0:F1} s (step {_timelineStep} -> {TimelineStep()}, at {at}).");
+            var step = TimelineStep();
+            if (step != _timelineStep)
+            {
+                Mod.log.Info($"Timeline: step {step} at {at}.");
+                _timelineStep = step;
+            }
+            _timelineLastStart = started;
+            _timelineLastImporterMs = importerMs;
         }
 
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
@@ -408,18 +460,21 @@ namespace cs2_osm_importer
 
             IsImporting = true;
             _phase = WorkPhase.DeleteRoads;
-            _pendingDeleteEntities = _generatedEdgeEntities.Where(entity => entity != Entity.Null).ToList();
-            _pendingDeleteEntities.AddRange(FindRoundaboutObjectsOn(_pendingDeleteEntities));
+            _generatedEdgeEntities.RemoveWhere(entity => entity == Entity.Null);
+            var objects = FindRoundaboutObjectsOn(_generatedEdgeEntities.ToList());
             // Deleting a lot's surface also deletes the aisles and stalls it owns.
-            _pendingDeleteEntities.AddRange(TakeGeneratedParkingLots());
+            objects.AddRange(TakeGeneratedParkingLots());
             // Park grass, park buildings (with their own paths and areas) and park trees.
-            _pendingDeleteEntities.AddRange(TakeGeneratedParks());
+            objects.AddRange(TakeGeneratedParks());
             // Lake water sources (the water already there drains away once its sources are gone).
-            _pendingDeleteEntities.AddRange(TakeGeneratedLakes());
+            objects.AddRange(TakeGeneratedLakes());
+            BuildDeleteOrder(objects, _generatedEdgeEntities);
             _pendingDeleteIndex = 0;
+            _deleteBatchIndex = 0;
             _deletedEdgeCount = 0;
             _deleteCompletionPending = false;
             _generatedEdgeEntities.Clear();
+            Mod.log.Info($"Delete Generated: {_pendingDeleteEntities.Count} entities to delete in {_deleteBatchEnds.Count} frames.");
             SetStatus(L("OsmImporter.Status.DeletingSegments", "Deleting all segments..."));
             StatusSummary = string.Empty;
             return true;
@@ -511,6 +566,7 @@ namespace cs2_osm_importer
                 _highwayPrefabEntities.Clear();
                 _highwayPrefabNames.Clear();
                 _laneSpecificPrefabEntities.Clear();
+                _manualPrefabCache.Clear();
                 if (!_prefabSystem.TryGetComponentData(prefab, out _netData))
                 {
                     Complete(LF("OsmImporter.Status.PrefabMissingNetData", "Road prefab '{0}' has no NetData.", prefab.name));
@@ -807,7 +863,12 @@ namespace cs2_osm_importer
             {
                 _applyWaitFrames++;
                 var pendingDefinitions = CountPendingDefinitions();
-                var generatedRoadEdges = Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
+                // Roads and tracks are a cheap count; the full count (with pathways) builds a list of every edge,
+                // ~15 ms a frame on full Seattle while parking, parks and lakes poll.
+                var roadEdges = GetCurrentNetEdges().CalculateEntityCount();
+                var generatedRoadEdges = roadEdges > _baselineEdgeCount
+                    ? roadEdges - _baselineEdgeCount
+                    : Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
                 var consumedDefinitions = Math.Max(0, _importedSegments - pendingDefinitions);
 
                 var waitMsg = pendingDefinitions > 0
@@ -913,6 +974,7 @@ namespace cs2_osm_importer
                         _generationReadyLogged = true;
                         // Road and roundabout definitions the game applied but left in place (see CountUnprocessedDefinitions).
                         var cleared = DestroyProcessedDefinitions(SessionDefinitions());
+                        RefreshGeneratedEdges();
                         Mod.log.Info($"Generation ready: roads, parking lots and parks built {_generationClock.Elapsed.TotalSeconds:F1} s after Generate" +
                                      (LakesFilling ? $"; {_lakeFills.Count} lake water sources still filling" : string.Empty) +
                                      $"; {cleared} processed definitions cleared.");
@@ -926,6 +988,7 @@ namespace cs2_osm_importer
                         return;
                     }
 
+                    generatedRoadEdges = Math.Max(0, CountAllNetEdges() - _baselineEdgeCount);
                     var message = generatedRoadEdges > 0
                         ? LF("OsmImporter.Status.GeneratedRoads", "CS2 consumed {0} road definitions; detected {1} new road edges. Import bounds: {2}.", _importedSegments, generatedRoadEdges, ShortBounds(_document))
                         : LF("OsmImporter.Status.GeneratedRoadsUnknownSimple", "CS2 consumed {0} road definitions. Generated road count could not be verified.", _importedSegments);
@@ -1470,6 +1533,176 @@ namespace cs2_osm_importer
             return result;
         }
 
+        /// <summary>
+        /// At "Generation ready": every unowned edge that was not there before the generation. The game splits our
+        /// roads further (lot entrances, park paths and the course merge add nodes), and those pieces are new
+        /// entities the name matching never saw, so Delete Generated left them behind. Owned edges (lot aisles,
+        /// building paths) go with their owners.
+        /// </summary>
+        private void RefreshGeneratedEdges()
+        {
+            var before = _generatedEdgeEntities.Count;
+            using var edges = GetCurrentNetEdgeArray(Allocator.Temp);
+            _generatedEdgeEntities.Clear();
+            foreach (var edge in edges)
+            {
+                if (!_baselineSegments.Contains(edge) && !EntityManager.HasComponent<Owner>(edge))
+                    _generatedEdgeEntities.Add(edge);
+            }
+            Mod.log.Info($"Generated edges for Delete Generated: {_generatedEdgeEntities.Count} (name matching saw {before}).");
+        }
+
+        /// <summary>Start and end nodes of the edges that have no other live edge.</summary>
+        private List<Entity> FindNodesOnlyUsedBy(HashSet<Entity> edges)
+        {
+            var candidates = new HashSet<Entity>();
+            foreach (var e in edges)
+            {
+                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Edge>(e))
+                    continue;
+                var edge = EntityManager.GetComponentData<Edge>(e);
+                candidates.Add(edge.m_Start);
+                candidates.Add(edge.m_End);
+            }
+
+            var result = new List<Entity>();
+            foreach (var node in candidates)
+            {
+                if (!EntityManager.Exists(node) || EntityManager.HasComponent<Deleted>(node))
+                    continue;
+                var shared = false;
+                if (EntityManager.HasBuffer<ConnectedEdge>(node))
+                {
+                    foreach (var connected in EntityManager.GetBuffer<ConnectedEdge>(node, true))
+                    {
+                        if (!edges.Contains(connected.m_Edge) && EntityManager.Exists(connected.m_Edge) && !EntityManager.HasComponent<Deleted>(connected.m_Edge))
+                        {
+                            shared = true;
+                            break;
+                        }
+                    }
+                }
+                if (!shared)
+                    result.Add(node);
+            }
+            return result;
+        }
+
+        // Delete Generated, measured on full Seattle (219k entities; 406k with the nodes):
+        // - 128 edges a frame, one at a time: about 110 s for 43k edges.
+        // - 4096 a frame in city-wide hash order, nodes left in place: ~20 s a frame, ~18 min. A deleted edge whose
+        //   nodes stay makes the game rebuild those nodes and every edge still on them (geometry, ~15 lanes each),
+        //   and scattered batches rebuilt most of the city again and again.
+        // - Everything with its nodes in one frame: tagged in 7 s, then the game exited silently (no crash dump),
+        //   most likely out of memory at 23.4 GB of 28 GB. 16384 edges a frame (with their nodes): the same, after
+        //   6 frames at 24.3 GB.
+        // - 2048 edges a frame by 512 m tile, in entity order inside a tile: 14 s a frame. Entity order is queue
+        //   order (all footways, then each road type), so a batch took a tile's footways and left its roads
+        //   half-connected to be rebuilt.
+        // So: the generated objects first, then edges along a Z-order curve of 8 m cells (each batch one compact
+        // area), each node in the frame of its last edge, so only nodes on a batch's border are left half-connected
+        // for a frame; small batches keep the game's own per-frame memory for the deletions low.
+        private const float DeleteCellMeters = 8f;
+        private const int DeleteEdgesPerFrame = 2048;
+        private const int DeleteObjectsPerFrame = 2048;
+        private readonly List<int> _deleteBatchEnds = new List<int>();
+        private int _deleteBatchIndex;
+        private readonly System.Diagnostics.Stopwatch _deleteClock = new System.Diagnostics.Stopwatch();
+        private int _deleteFrames;
+
+        /// <summary>Z-order of an 8 m cell: consecutive codes stay close together, so a run of edges is one compact area.</summary>
+        private static long MortonCode(int x, int z)
+        {
+            var ux = (uint)(x + (1 << 20)) & 0x1FFFFF;
+            var uz = (uint)(z + (1 << 20)) & 0x1FFFFF;
+            long code = 0;
+            for (var bit = 0; bit < 21; bit++)
+                code |= ((long)((ux >> bit) & 1) << (2 * bit)) | ((long)((uz >> bit) & 1) << (2 * bit + 1));
+            return code;
+        }
+
+        /// <summary>Fills _pendingDeleteEntities and _deleteBatchEnds (one end index per frame).</summary>
+        private void BuildDeleteOrder(List<Entity> objects, HashSet<Entity> edges)
+        {
+            _pendingDeleteEntities = new List<Entity>();
+            _deleteBatchEnds.Clear();
+            var queued = new HashSet<Entity>();
+            foreach (var o in objects)
+            {
+                if (!queued.Add(o))
+                    continue;
+                _pendingDeleteEntities.Add(o);
+                if (_pendingDeleteEntities.Count % DeleteObjectsPerFrame == 0)
+                    _deleteBatchEnds.Add(_pendingDeleteEntities.Count);
+            }
+            if (_pendingDeleteEntities.Count > 0 && (_deleteBatchEnds.Count == 0 || _deleteBatchEnds[_deleteBatchEnds.Count - 1] < _pendingDeleteEntities.Count))
+                _deleteBatchEnds.Add(_pendingDeleteEntities.Count);
+
+            // Exclusive nodes and how many of our edges each still has.
+            var exclusiveNodes = FindNodesOnlyUsedBy(edges);
+            var remaining = new Dictionary<Entity, int>(exclusiveNodes.Count);
+            foreach (var node in exclusiveNodes)
+            {
+                var count = 0;
+                if (EntityManager.HasBuffer<ConnectedEdge>(node))
+                {
+                    foreach (var connected in EntityManager.GetBuffer<ConnectedEdge>(node, true))
+                    {
+                        if (edges.Contains(connected.m_Edge))
+                            count++;
+                    }
+                }
+                remaining[node] = count;
+            }
+
+            var ordered = new List<(long Tile, int Index, Entity Edge, Entity Start, Entity End)>(edges.Count);
+            foreach (var e in edges)
+            {
+                if (!EntityManager.Exists(e) || !EntityManager.HasComponent<Edge>(e))
+                    continue;
+                var edge = EntityManager.GetComponentData<Edge>(e);
+                var mid = float3.zero;
+                if (EntityManager.HasComponent<Node>(edge.m_Start) && EntityManager.HasComponent<Node>(edge.m_End))
+                    mid = (EntityManager.GetComponentData<Node>(edge.m_Start).m_Position + EntityManager.GetComponentData<Node>(edge.m_End).m_Position) * 0.5f;
+                var tile = MortonCode((int)math.floor(mid.x / DeleteCellMeters), (int)math.floor(mid.z / DeleteCellMeters));
+                ordered.Add((tile, e.Index, e, edge.m_Start, edge.m_End));
+            }
+            ordered.Sort((a, b) => a.Tile != b.Tile ? a.Tile.CompareTo(b.Tile) : a.Index.CompareTo(b.Index));
+
+            var inBatch = 0;
+            foreach (var item in ordered)
+            {
+                if (!queued.Add(item.Edge))
+                    continue;
+                _pendingDeleteEntities.Add(item.Edge);
+                ReleaseNode(item.Start);
+                if (item.End != item.Start)
+                    ReleaseNode(item.End);
+                if (++inBatch >= DeleteEdgesPerFrame)
+                {
+                    _deleteBatchEnds.Add(_pendingDeleteEntities.Count);
+                    inBatch = 0;
+                }
+            }
+            // Nodes still counting an edge that was gone already.
+            foreach (var pair in remaining)
+            {
+                if (pair.Value > 0 && queued.Add(pair.Key))
+                    _pendingDeleteEntities.Add(pair.Key);
+            }
+            if (_deleteBatchEnds.Count == 0 || _deleteBatchEnds[_deleteBatchEnds.Count - 1] < _pendingDeleteEntities.Count)
+                _deleteBatchEnds.Add(_pendingDeleteEntities.Count);
+
+            void ReleaseNode(Entity node)
+            {
+                if (!remaining.TryGetValue(node, out var left))
+                    return;
+                remaining[node] = --left;
+                if (left == 0 && queued.Add(node))
+                    _pendingDeleteEntities.Add(node);
+            }
+        }
+
         private void DeleteRoads()
         {
             try
@@ -1480,22 +1713,30 @@ namespace cs2_osm_importer
                     _pendingDeleteEntities.Clear();
                     HasGeneratedAssets = false;
                     Complete(LF("OsmImporter.Status.DeleteComplete", "Marked {0} edges for deletion.", _deletedEdgeCount));
-                    Mod.log.Info(Status);
+                    Mod.log.Info($"{Status} Tagging took {_deleteClock.Elapsed.TotalSeconds:F1} s over {_deleteFrames} frames.");
                     return;
                 }
 
-                var processedThisFrame = 0;
-                while (_pendingDeleteIndex < _pendingDeleteEntities.Count && processedThisFrame < MaxSegmentsPerFrame)
+                if (_pendingDeleteIndex == 0)
+                {
+                    _deleteClock.Restart();
+                    _deleteFrames = 0;
+                }
+                _deleteFrames++;
+                var batchEnd = _deleteBatchIndex < _deleteBatchEnds.Count ? _deleteBatchEnds[_deleteBatchIndex++] : _pendingDeleteEntities.Count;
+                var batch = new List<Entity>(Math.Max(0, batchEnd - _pendingDeleteIndex));
+                while (_pendingDeleteIndex < batchEnd)
                 {
                     var entity = _pendingDeleteEntities[_pendingDeleteIndex++];
                     if (EntityManager.Exists(entity) && !EntityManager.HasComponent<Deleted>(entity))
-                    {
-                        EntityManager.AddComponentData(entity, new Deleted());
-                        EntityManager.AddComponentData(entity, new Updated());
-                        _deletedEdgeCount++;
-                    }
-
-                    processedThisFrame++;
+                        batch.Add(entity);
+                }
+                if (batch.Count > 0)
+                {
+                    using var entities = new NativeArray<Entity>(batch.ToArray(), Allocator.Temp);
+                    EntityManager.AddComponent<Deleted>(entities);
+                    EntityManager.AddComponent<Updated>(entities);
+                    _deletedEdgeCount += batch.Count;
                 }
 
                 if (_pendingDeleteIndex < _pendingDeleteEntities.Count)
@@ -1559,8 +1800,18 @@ namespace cs2_osm_importer
 
             var tangent = length > 0.001f ? delta / 3f : new float3(0f, 0f, 0f);
 
-            var entity = EntityManager.CreateEntity();
-            EntityManager.AddComponentData(entity, new CreationDefinition
+            // One entity with every component at once: four AddComponentData calls are four structural changes each,
+            // 10.9 s for full Seattle's 201k definitions in one frame.
+            if (!_courseDefinitionArchetype.Valid)
+            {
+                _courseDefinitionArchetype = EntityManager.CreateArchetype(
+                    ComponentType.ReadWrite<CreationDefinition>(), ComponentType.ReadWrite<NetCourse>(),
+                    ComponentType.ReadWrite<Updated>(), ComponentType.ReadWrite<OsmImportDefinition>());
+            }
+            Entity entity;
+            using (var created = EntityManager.CreateEntity(_courseDefinitionArchetype, 1, Allocator.Temp))
+                entity = created[0];
+            EntityManager.SetComponentData(entity, new CreationDefinition
             {
                 m_Prefab = prefabEntity,
                 m_SubPrefab = Entity.Null,
@@ -1570,7 +1821,7 @@ namespace cs2_osm_importer
                 m_Flags = CreationFlags.Permanent,
                 m_RandomSeed = ImportedHash(start, end)
             });
-            EntityManager.AddComponentData(entity, new NetCourse
+            EntityManager.SetComponentData(entity, new NetCourse
             {
                 m_StartPosition = new CoursePos
                 {
@@ -1598,11 +1849,12 @@ namespace cs2_osm_importer
                 m_Elevation = float2.zero,
                 m_Length = length
             });
-            EntityManager.AddComponentData(entity, new Updated());
-            EntityManager.AddComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
+            EntityManager.SetComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
 
             return entity;
         }
+
+        private EntityArchetype _courseDefinitionArchetype;
 
         private void LogRoundaboutDiagnostics(OsmWay way)
         {
@@ -1656,20 +1908,45 @@ namespace cs2_osm_importer
                 None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>(), ComponentType.ReadOnly<Owner>() }
             });
             using var nodeArray = nodes.ToEntityArray(Allocator.Temp);
+            using var nodeData = nodes.ToComponentDataArray<Node>(Allocator.Temp);
+
+            // Nodes by 2 m cell: scanning every node for each roundabout took 12 s on full Seattle (681 x 200k).
+            const float searchRadius = 2f;
+            var nodeCells = new Dictionary<long, List<int>>();
+            for (var i = 0; i < nodeData.Length; i++)
+            {
+                var key = NodeCellKey(nodeData[i].m_Position.xz, searchRadius);
+                if (!nodeCells.TryGetValue(key, out var list))
+                    nodeCells[key] = list = new List<int>(1);
+                list.Add(i);
+            }
 
             var placed = 0;
             foreach (var way in _nodeRoundabouts)
             {
                 var center = way.RoundaboutCenter;
                 var node = Entity.Null;
-                var best = 2f;
-                foreach (var n in nodeArray)
+                var best = searchRadius;
+                var bestIndex = int.MaxValue;
+                var cx = (int)math.floor(center.x / searchRadius);
+                var cz = (int)math.floor(center.z / searchRadius);
+                for (var dx = -1; dx <= 1; dx++)
                 {
-                    var d = math.distance(EntityManager.GetComponentData<Node>(n).m_Position.xz, center.xz);
-                    if (d < best)
+                    for (var dz = -1; dz <= 1; dz++)
                     {
-                        best = d;
-                        node = n;
+                        if (!nodeCells.TryGetValue(((long)(cx + dx) << 32) ^ (uint)(cz + dz), out var list))
+                            continue;
+                        // The nearest node; on a tie the first in query order, as the full scan picked it.
+                        foreach (var i in list)
+                        {
+                            var d = math.distance(nodeData[i].m_Position.xz, center.xz);
+                            if (d < best || (d == best && i < bestIndex && node != Entity.Null))
+                            {
+                                best = d;
+                                bestIndex = i;
+                                node = nodeArray[i];
+                            }
+                        }
                     }
                 }
 
@@ -1716,6 +1993,9 @@ namespace cs2_osm_importer
 
             Mod.log.Info($"Placed {placed} of {_nodeRoundabouts.Count} roundabout objects.");
         }
+
+        private static long NodeCellKey(float2 xz, float cellSize) =>
+            ((long)(int)math.floor(xz.x / cellSize) << 32) ^ (uint)(int)math.floor(xz.y / cellSize);
 
         private void RefreshRoundaboutNodes()
         {
@@ -1864,7 +2144,10 @@ namespace cs2_osm_importer
                 spatialIndex.Add(SpatialCellKey(queuedInfo.EndPos, cellSize), i);
             }
 
-            var matchedSegments = new NativeParallelHashSet<int>(_queuedSegmentInfos.Count, Allocator.Temp);
+            var segmentArrays = new SegmentArrays(_queuedSegmentInfos);
+            var segmentGrid = new QueuedSegmentGrid(_queuedSegmentInfos);
+            var namesClock = System.Diagnostics.Stopwatch.StartNew();
+            long localTicks = 0, globalTicks = 0;
             var namedTargets = new HashSet<Entity>();
             var namedCount = 0;
             var proxCheckCount = 0;
@@ -1893,13 +2176,18 @@ namespace cs2_osm_importer
                 var bestMidScore = float.MaxValue;
                 var bestIndex = -1;
 
-                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, startPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
-                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, endPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
-                ConsiderQueuedSegmentMatches(spatialIndex, matchedSegments, startPos, endPos, edgeMid, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                var splitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                ConsiderQueuedSegmentMatches(spatialIndex, segmentArrays, startPos, endPos, startPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                ConsiderQueuedSegmentMatches(spatialIndex, segmentArrays, startPos, endPos, endPos, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                ConsiderQueuedSegmentMatches(spatialIndex, segmentArrays, startPos, endPos, edgeMid, edgeMid, edgeDir, cellSize, ref bestIndex, ref bestEndpointScore, ref bestMidScore, ref dirMismatchCount);
+                localTicks += System.Diagnostics.Stopwatch.GetTimestamp() - splitStart;
 
                 if (bestIndex < 0)
                 {
-                    if (TryFindBestQueuedSegmentGlobally(startPos, endPos, edgeMid, edgeDir, matchedSegments, out var globalIndex, out var globalScore))
+                    splitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    var foundGlobally = segmentGrid.TryFindBest(_queuedSegmentInfos, startPos, endPos, edgeMid, edgeDir, segmentArrays.Matched, _queuedSegmentInfos.Count - namedCount, out var globalIndex, out var globalScore);
+                    globalTicks += System.Diagnostics.Stopwatch.GetTimestamp() - splitStart;
+                    if (foundGlobally)
                     {
                         bestIndex = globalIndex;
                         bestEndpointScore = globalScore;
@@ -1917,10 +2205,13 @@ namespace cs2_osm_importer
                         unmatchedLogCount++;
                         LogUnmatchedRoadEdge(spatialIndex, edgeEntity, startPos, endPos, edgeMid, edgeDir);
                     }
+                    // Still ours (a piece of a generated road the game split further): Delete Generated must take
+                    // it too, or it stays behind and the next generation builds around it.
+                    _generatedEdgeEntities.Add(edgeEntity);
                     continue;
                 }
 
-                matchedSegments.Add(bestIndex);
+                segmentArrays.Matched[bestIndex] = true;
                 var roadName = _queuedSegmentInfos[bestIndex].Name;
                 if (!string.IsNullOrWhiteSpace(roadName))
                 {
@@ -1941,10 +2232,10 @@ namespace cs2_osm_importer
                 $"Deferred {proxCheckCount} road names for SetCustomName on aggregates (UIUpdate). " +
                 $"{namedCount} total edge matches, {proxMissCount} unmatched edges, " +
                 $"{dirMismatchCount} direction mismatches skipped, {globalFallbackCount} global fallbacks. " +
-                $"{newEdges.Count} new edges, {_queuedSegmentInfos.Count} queued segments.");
+                $"{newEdges.Count} new edges, {_queuedSegmentInfos.Count} queued segments; matching took {namesClock.Elapsed.TotalSeconds:F1} s " +
+                $"(nearby {localTicks / (double)System.Diagnostics.Stopwatch.Frequency:F1} s, anywhere {globalTicks / (double)System.Diagnostics.Stopwatch.Frequency:F1} s).");
 
             spatialIndex.Dispose();
-            matchedSegments.Dispose();
         }
 
         private void ApplyRoadServiceUpgrades()
@@ -2229,9 +2520,34 @@ namespace cs2_osm_importer
             return (int)math.hash(new int2(cx, cz));
         }
 
+        /// <summary>The queued segments' points and directions as arrays, and which are matched, for name matching.</summary>
+        private sealed class SegmentArrays
+        {
+            public readonly float3[] Start, End, Mid, Dir;
+            public readonly bool[] Matched;
+
+            public SegmentArrays(List<QueuedSegmentInfo> segments)
+            {
+                var n = segments.Count;
+                Start = new float3[n];
+                End = new float3[n];
+                Mid = new float3[n];
+                Dir = new float3[n];
+                Matched = new bool[n];
+                for (var i = 0; i < n; i++)
+                {
+                    var s = segments[i];
+                    Start[i] = s.StartPos;
+                    End[i] = s.EndPos;
+                    Mid[i] = s.MidPoint;
+                    Dir[i] = math.normalizesafe(s.EndPos - s.StartPos, new float3(0f, 0f, 1f));
+                }
+            }
+        }
+
         private void ConsiderQueuedSegmentMatches(
             NativeParallelMultiHashMap<int, int> spatialIndex,
-            NativeParallelHashSet<int> matchedSegments,
+            SegmentArrays segments,
             float3 edgeStart,
             float3 edgeEnd,
             float3 centerPos,
@@ -2254,22 +2570,23 @@ namespace cs2_osm_importer
 
                     do
                     {
-                        if (matchedSegments.Contains(segIndex))
+                        if (segments.Matched[segIndex])
                             continue;
 
-                var queuedInfo = _queuedSegmentInfos[segIndex];
-                        var queuedDir = math.normalizesafe(
-                            queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
-                        var dirDot = math.abs(math.dot(edgeDir, queuedDir));
+                        // Precomputed per segment: copying the struct out of the list and normalising its direction
+                        // for every candidate made this loop most of the 19 s name matching on full Seattle.
+                        var segStart = segments.Start[segIndex];
+                        var segEnd = segments.End[segIndex];
+                        var dirDot = math.abs(math.dot(edgeDir, segments.Dir[segIndex]));
                         if (dirDot < 0.5f)
                             dirMismatchCount++;
 
-                        var sameOrientationScore = math.distancesq(edgeStart, queuedInfo.StartPos) +
-                                           math.distancesq(edgeEnd, queuedInfo.EndPos);
-                var reversedOrientationScore = math.distancesq(edgeStart, queuedInfo.EndPos) +
-                                                math.distancesq(edgeEnd, queuedInfo.StartPos);
+                        var sameOrientationScore = math.distancesq(edgeStart, segStart) +
+                                                   math.distancesq(edgeEnd, segEnd);
+                        var reversedOrientationScore = math.distancesq(edgeStart, segEnd) +
+                                                       math.distancesq(edgeEnd, segStart);
                 var endpointScore = math.min(sameOrientationScore, reversedOrientationScore);
-                var midScore = math.distancesq(queuedInfo.MidPoint, edgeMid);
+                var midScore = math.distancesq(segments.Mid[segIndex], edgeMid);
                 var directionPenalty = (1f - math.clamp(dirDot, 0f, 1f)) * 25f;
                 var totalScore = endpointScore + midScore * 0.25f + directionPenalty;
 
@@ -2314,32 +2631,140 @@ namespace cs2_osm_importer
                 $"Unmatched edge {edgeEntity.Index}:{edgeEntity.Version} start={FormatPoint(startPos)} end={FormatPoint(endPos)} mid={FormatPoint(edgeMid)} dir={FormatPoint(edgeDir)} candidates={candidateSummary}");
         }
 
-        private bool TryFindBestQueuedSegmentGlobally(
-            float3 edgeStart,
-            float3 edgeEnd,
-            float3 edgeMid,
-            float3 edgeDir,
-            NativeParallelHashSet<int> matchedSegments,
-            out int bestIndex,
-            out float bestScore)
+        /// <summary>
+        /// Queued segments by midpoint cell, for the best-scoring unmatched segment anywhere. The score is at least a
+        /// quarter of the squared midpoint distance, so rings of cells are searched outwards until no farther cell can
+        /// beat the best score: the same answer (lowest index on a tie) as scoring every segment, which took 53 s on
+        /// full Seattle (8k edges x 201k segments).
+        /// </summary>
+        private sealed class QueuedSegmentGrid
         {
-            bestIndex = -1;
-            bestScore = float.MaxValue;
+            private const float CellSize = 32f;
+            private readonly Dictionary<long, List<int>> _cells = new Dictionary<long, List<int>>();
+            private readonly int _minX, _maxX, _minZ, _maxZ;
+            // Possibly unmatched segments, ascending; compacted by each direct scan (matches are only ever added).
+            private readonly List<int> _unmatched;
 
-            for (var i = 0; i < _queuedSegmentInfos.Count; i++)
+            public QueuedSegmentGrid(List<QueuedSegmentInfo> segments)
             {
-                if (matchedSegments.Contains(i))
-                    continue;
-
-                var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, _queuedSegmentInfos[i], out _);
-                if (score < bestScore)
+                _minX = _minZ = int.MaxValue;
+                _maxX = _maxZ = int.MinValue;
+                _unmatched = new List<int>(segments.Count);
+                for (var i = 0; i < segments.Count; i++)
                 {
-                    bestScore = score;
-                    bestIndex = i;
+                    _unmatched.Add(i);
+                    var mid = segments[i].MidPoint;
+                    var cx = (int)math.floor(mid.x / CellSize);
+                    var cz = (int)math.floor(mid.z / CellSize);
+                    var key = ((long)cx << 32) ^ (uint)cz;
+                    if (!_cells.TryGetValue(key, out var list))
+                        _cells[key] = list = new List<int>(4);
+                    list.Add(i);
+                    _minX = math.min(_minX, cx);
+                    _maxX = math.max(_maxX, cx);
+                    _minZ = math.min(_minZ, cz);
+                    _maxZ = math.max(_maxZ, cz);
                 }
             }
 
-            return bestIndex >= 0;
+            public bool TryFindBest(
+                List<QueuedSegmentInfo> segments,
+                float3 edgeStart,
+                float3 edgeEnd,
+                float3 edgeMid,
+                float3 edgeDir,
+                bool[] matchedSegments,
+                int unmatchedCount,
+                out int bestIndex,
+                out float bestScore)
+            {
+                bestIndex = -1;
+                bestScore = float.MaxValue;
+                if (unmatchedCount <= 0)
+                    return false;
+
+                var cx = (int)math.floor(edgeMid.x / CellSize);
+                var cz = (int)math.floor(edgeMid.z / CellSize);
+                var maxRing = math.max(math.max(math.abs(cx - _minX), math.abs(cx - _maxX)), math.max(math.abs(cz - _minZ), math.abs(cz - _maxZ)));
+                var cellsVisited = 0;
+                for (var ring = 0; ring <= maxRing; ring++)
+                {
+                    // Few segments left unmatched (often none: the game splits edges, so there are more edges than
+                    // segments): scanning those directly beats walking a large empty neighbourhood.
+                    cellsVisited += ring == 0 ? 1 : 8 * ring;
+                    if (cellsVisited > unmatchedCount)
+                        return ScanUnmatched(segments, edgeStart, edgeEnd, edgeMid, edgeDir, matchedSegments, out bestIndex, out bestScore);
+
+                    for (var dx = -ring; dx <= ring; dx++)
+                    {
+                        var edgeColumn = dx == -ring || dx == ring;
+                        for (var dz = -ring; dz <= ring; dz += edgeColumn ? 1 : 2 * ring)
+                        {
+                            var key = ((long)(cx + dx) << 32) ^ (uint)(cz + dz);
+                            if (!_cells.TryGetValue(key, out var list))
+                                continue;
+                            // Matched segments leave the cell for good (the lowest index wins a tie, so the order in a
+                            // cell does not matter): walking them again on every search made this 15 s on full Seattle.
+                            var kept = 0;
+                            for (var k = 0; k < list.Count; k++)
+                            {
+                                var i = list[k];
+                                if (matchedSegments[i])
+                                    continue;
+                                list[kept++] = i;
+                                var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, segments[i], out _);
+                                if (score < bestScore || (score == bestScore && i < bestIndex))
+                                {
+                                    bestScore = score;
+                                    bestIndex = i;
+                                }
+                            }
+                            if (kept == 0)
+                                _cells.Remove(key);
+                            else if (kept < list.Count)
+                                list.RemoveRange(kept, list.Count - kept);
+                        }
+                    }
+
+                    // Cells in later rings are at least ring * CellSize from the edge's midpoint (it lies in the centre cell).
+                    var nearestLater = ring * CellSize;
+                    if (bestIndex >= 0 && 0.25f * nearestLater * nearestLater > bestScore)
+                        break;
+                }
+
+                return bestIndex >= 0;
+            }
+
+            /// <summary>Every unmatched segment in index order (dropping those matched since the last scan).</summary>
+            private bool ScanUnmatched(
+                List<QueuedSegmentInfo> segments,
+                float3 edgeStart,
+                float3 edgeEnd,
+                float3 edgeMid,
+                float3 edgeDir,
+                bool[] matchedSegments,
+                out int bestIndex,
+                out float bestScore)
+            {
+                bestIndex = -1;
+                bestScore = float.MaxValue;
+                var kept = 0;
+                for (var k = 0; k < _unmatched.Count; k++)
+                {
+                    var i = _unmatched[k];
+                    if (matchedSegments[i])
+                        continue;
+                    _unmatched[kept++] = i;
+                    var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, segments[i], out _);
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestIndex = i;
+                    }
+                }
+                _unmatched.RemoveRange(kept, _unmatched.Count - kept);
+                return bestIndex >= 0;
+            }
         }
 
         private bool TryGetQueuedSegmentCandidates(
@@ -2380,20 +2805,21 @@ namespace cs2_osm_importer
             float3 edgeDir,
             List<string> candidates)
         {
-            var scored = new List<(float Score, string Text)>();
-            foreach (var queuedInfo in _queuedSegmentInfos)
+            var scored = new List<(float Score, int Index)>(_queuedSegmentInfos.Count);
+            for (var i = 0; i < _queuedSegmentInfos.Count; i++)
+                scored.Add((ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, _queuedSegmentInfos[i], out _), i));
+
+            foreach (var item in scored.OrderBy(s => s.Score).Take(5))
             {
-                var score = ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, queuedInfo, out var midScore);
+                var queuedInfo = _queuedSegmentInfos[item.Index];
+                ScoreQueuedSegment(edgeStart, edgeEnd, edgeMid, edgeDir, queuedInfo, out var midScore);
                 var queuedDir = math.normalizesafe(queuedInfo.EndPos - queuedInfo.StartPos, new float3(0f, 0f, 1f));
                 var dirDot = math.abs(math.dot(edgeDir, queuedDir));
                 var endpointScore = math.min(
                     math.distancesq(edgeStart, queuedInfo.StartPos) + math.distancesq(edgeEnd, queuedInfo.EndPos),
                     math.distancesq(edgeStart, queuedInfo.EndPos) + math.distancesq(edgeEnd, queuedInfo.StartPos));
-                scored.Add((score, $"{queuedInfo.Name ?? string.Empty}@{score:F1}/{endpointScore:F1}/{midScore:F1}/d{dirDot:F2}/l{queuedInfo.Lanes}"));
+                candidates.Add($"{queuedInfo.Name ?? string.Empty}@{item.Score:F1}/{endpointScore:F1}/{midScore:F1}/d{dirDot:F2}/l{queuedInfo.Lanes}");
             }
-
-            foreach (var item in scored.OrderBy(s => s.Score).Take(5))
-                candidates.Add(item.Text);
         }
 
         private static float ScoreQueuedSegment(
@@ -2964,16 +3390,6 @@ namespace cs2_osm_importer
             if (!rulesByType.TryGetValue(roadType, out var rules) || rules == null || rules.Count == 0)
                 return false;
 
-            IEnumerable<PrefabBase> candidateSource;
-            if (IsTrackLikeHighwayType(way.Highway))
-                candidateSource = GetTrackPrefabCandidates();
-            else if (IsPathLikeHighwayType(way.Highway))
-                candidateSource = GetPathPrefabCandidates();
-            else
-                candidateSource = GetRoadPrefabCandidates();
-
-            var roadCandidates = candidateSource.Where(p => p != null).ToList();
-
             PrefabSelectionRule bestRule = null;
             var bestRuleScore = -1;
             foreach (var rule in rules)
@@ -2991,17 +3407,36 @@ namespace cs2_osm_importer
 
             if (bestRule != null)
             {
+                // Resolved once per road type and rule: listing every candidate prefab for each way took most of the
+                // 10.9 s queueing frame on full Seattle (and logged 22k lines).
+                var cacheKey = roadType + "|" + bestRule.PrefabName;
+                if (_manualPrefabCache.TryGetValue(cacheKey, out prefabEntity))
+                    return prefabEntity != Entity.Null;
+
+                IEnumerable<PrefabBase> candidateSource;
+                if (IsTrackLikeHighwayType(way.Highway))
+                    candidateSource = GetTrackPrefabCandidates();
+                else if (IsPathLikeHighwayType(way.Highway))
+                    candidateSource = GetPathPrefabCandidates();
+                else
+                    candidateSource = GetRoadPrefabCandidates();
+
+                var roadCandidates = candidateSource.Where(p => p != null).ToList();
                 if (TryResolveRulePrefab(bestRule.PrefabName, roadCandidates, out prefabEntity))
                 {
+                    _manualPrefabCache[cacheKey] = prefabEntity;
                     Mod.log.Info($"Selected manual prefab '{DescribePrefab(prefabEntity)}' for road type '{roadType}'.");
                     return true;
                 }
 
+                _manualPrefabCache[cacheKey] = Entity.Null;
                 Mod.log.Warn($"Manual prefab rule for road type '{roadType}' matched but prefab '{bestRule.PrefabName}' was not found among usable candidates.");
             }
 
             return false;
         }
+
+        private readonly Dictionary<string, Entity> _manualPrefabCache = new Dictionary<string, Entity>(StringComparer.Ordinal);
 
         private bool HasManualPrefabRulesForWay(OsmWay way)
         {
