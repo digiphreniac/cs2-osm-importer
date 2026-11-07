@@ -2334,8 +2334,9 @@ namespace cs2_osm_importer
         private const float JunctionCrossingMeters = 12f;
         // A path joining a road this close to an ordinary junction gets no crosswalk: the junction's serves it.
         private const float PathJoinBesideJunctionMeters = 15f;
-        // CS2 draws no junction crosswalk on a leg shorter than about this that ends at another junction.
-        private const float MinCrosswalkLegMeters = 5f;
+        // CS2 draws no junction crosswalk on a leg shorter than about this that ends at another junction (none on 3.5,
+        // 7 and 7.4 m legs; it did on 10.8 m).
+        private const float MinCrosswalkLegMeters = 10f;
 
         private static bool IsMinorJunctionRoad(string highway)
         {
@@ -2351,6 +2352,8 @@ namespace cs2_osm_importer
                     return false;
             }
         }
+
+        private static bool IsCramped(JunctionLeg leg) => leg.Length < MinCrosswalkLegMeters && leg.OtherEndIsJunction;
 
         private static bool IsSideRoad(string highway)
         {
@@ -2376,6 +2379,7 @@ namespace cs2_osm_importer
             public bool NoSidewalk;
             public Entity Prefab;
             public bool OtherEndIsJunction;
+            public Entity OtherNode;
         }
 
         /// <summary>
@@ -2454,6 +2458,7 @@ namespace cs2_osm_importer
                             Length = curveLookup[legEdge].m_Length,
                             NoSidewalk = HasNoSidewalk(legEdge, atStart),
                             OtherEndIsJunction = connectedLookup.HasBuffer(atStart ? le.m_End : le.m_Start) && connectedLookup[atStart ? le.m_End : le.m_Start].Length >= 3,
+                            OtherNode = atStart ? le.m_End : le.m_Start,
                             Prefab = prefabRefLookup.HasComponent(legEdge) ? prefabRefLookup[legEdge].m_Prefab : Entity.Null
                         });
                     }
@@ -2560,21 +2565,35 @@ namespace cs2_osm_importer
                             }
                         }
                     }
-                // CS2 draws no crosswalk on an edge of a few metres between two close junctions: hand the crossing
-                // to the road's continuation on the other side of the node (the marked crossing on the Volunteer
-                // Park ring lies on a 3.4 m piece between two path joins and was lost).
-                if (best.HasValue && best.Value.Length < MinCrosswalkLegMeters && best.Value.OtherEndIsJunction)
+                // CS2 draws no crosswalk on a leg that runs only a few metres to another junction (3.5 m between two
+                // path joins on the Volunteer Park ring, 7.4 m from one to the ring's road junction, 7 m to a
+                // signalised junction). Hand the crossing to the road's continuation past either end of that piece,
+                // nearest the crossing first, skipping continuations that are cramped the same way.
+                if (best.HasValue && IsCramped(best.Value))
                 {
                     var from = best.Value;
                     JunctionLeg? across = null;
-                    foreach (var leg in junctions[bestNode])
+                    var acrossDist = float.MaxValue;
+                    foreach (var end in new[] { bestNode, from.OtherNode })
                     {
-                        if (leg.IsPath || leg.Edge == from.Edge || (leg.Length < MinCrosswalkLegMeters && leg.OtherEndIsJunction))
+                        if (!junctions.TryGetValue(end, out var endLegs))
                             continue;
-                        if (math.dot(leg.Direction, from.Direction) > -0.5f)
-                            continue; // not the continuation
-                        if (!across.HasValue || math.dot(leg.Direction, from.Direction) < math.dot(across.Value.Direction, from.Direction))
-                            across = leg;
+                        var fromHere = endLegs.FirstOrDefault(l => l.Edge == from.Edge);
+                        if (fromHere.Edge == Entity.Null)
+                            continue;
+                        var endDist = math.distance(nodeLookup[end].m_Position.xz, p);
+                        foreach (var leg in endLegs)
+                        {
+                            if (leg.IsPath || leg.Edge == from.Edge || IsCramped(leg))
+                                continue;
+                            if (math.dot(leg.Direction, fromHere.Direction) > -0.5f)
+                                continue; // not the continuation
+                            if (endDist < acrossDist)
+                            {
+                                acrossDist = endDist;
+                                across = leg;
+                            }
+                        }
                     }
                     if (across.HasValue)
                         best = across;
@@ -2656,7 +2675,7 @@ namespace cs2_osm_importer
                 // junction stays as CS2 drew it. A short piece ending at a plain bend does get its crosswalk (2 m at a
                 // cul-de-sac), so there the normal trim applies.
                 if (keepHere.Count > 0 &&
-                    roadLegs.Where(l => keepHere.Contains((l.Edge, l.AtStart))).All(l => l.Length < MinCrosswalkLegMeters && l.OtherEndIsJunction))
+                    roadLegs.Where(l => keepHere.Contains((l.Edge, l.AtStart))).All(IsCramped))
                 {
                     crampedLeftAlone++;
                     continue;

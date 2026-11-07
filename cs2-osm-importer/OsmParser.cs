@@ -314,6 +314,7 @@ namespace cs2_osm_importer
             // In game only (terrain sampled): the 15 m terrain split is what adds most of the removable points.
             if (sampleHeight != null)
                 SimplifyRoadPoints(finalWays, options.SimplifyPlanToleranceMeters, options.SimplifyHeightToleranceMeters);
+            ClearJunctionApproaches(finalWays);
             timer.Mark("simplify");
             document.Ways.AddRange(finalWays);
 
@@ -3722,6 +3723,143 @@ namespace cs2_osm_importer
 
             Mod.log.Info($"Simplified road points: {before} segments to {after} ({100f * (before - after) / Math.Max(1, before):F0}% fewer; " +
                          $"points within {planTolerance} m in plan and {heightTolerance} m in height of the line between their neighbours dropped; junctions and node features kept).");
+        }
+
+        // Shape points closer than this (along the way) to a junction are dropped, so each junction leg starts with one
+        // edge long enough for CS2 to shape the junction's corners.
+        private const float JunctionClearanceMeters = 8f;
+        // ... as long as the way stays within this of its OSM line (plan) and of its height profile.
+        private const float JunctionClearancePlanMeters = 0.5f;
+        private const float JunctionClearanceHeightMeters = 0.5f;
+
+        /// <summary>
+        /// A curved OSM way is a chain of short straight edges with a node at every OSM point (the Volunteer Park
+        /// ring: 41 points over 204 m, edges of about 5 m). Where such a way meets a junction, its legs were only a
+        /// few metres long, too short for CS2 to shape the junction: clipped kerb corners, grey wedges of sidewalk
+        /// fill, kinks. Drops each way's shape points within JunctionClearanceMeters of a junction (a point another
+        /// way also uses), walking out from it, while the remaining chord stays within the plan and height
+        /// tolerances of the dropped points. Never dropped: way ends, junctions, and points of node features.
+        /// </summary>
+        private static void ClearJunctionApproaches(List<OsmWay> ways)
+        {
+            var useCount = new Dictionary<float3, int>();
+            var seen = new HashSet<float3>();
+            var features = new HashSet<(int, int)>();
+            (int, int) FeatureKey(float3 p) => ((int)math.round(p.x * 20f), (int)math.round(p.z * 20f));
+            foreach (var way in ways)
+            {
+                seen.Clear();
+                foreach (var p in way.Points)
+                {
+                    if (seen.Add(p))
+                        useCount[p] = useCount.TryGetValue(p, out var c) ? c + 1 : 1;
+                }
+                foreach (var f in way.Crosswalks) features.Add(FeatureKey(f.Position));
+                foreach (var f in way.StopSigns) features.Add(FeatureKey(f.Position));
+                foreach (var f in way.TrafficLights) features.Add(FeatureKey(f.Position));
+                foreach (var r in way.TurnRestrictions) features.Add(FeatureKey(r.ViaPosition));
+            }
+            bool NearFeature(float3 p)
+            {
+                var (x, z) = FeatureKey(p);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                        if (features.Contains((x + dx, z + dz)))
+                            return true;
+                return false;
+            }
+
+            var dropped = 0;
+            var junctionsCleared = 0;
+            foreach (var way in ways)
+            {
+                var points = way.Points;
+                if (points.Count < 3 || way.IsNodeRoundabout)
+                    continue;
+                var heights = way.TerrainHeights.Count == points.Count ? way.TerrainHeights : null;
+                var n = points.Count;
+                var isJunction = new bool[n];
+                var fixedPoint = new bool[n];
+                for (var i = 0; i < n; i++)
+                {
+                    isJunction[i] = useCount[points[i]] > 1;
+                    fixedPoint[i] = i == 0 || i == n - 1 || isJunction[i] || NearFeature(points[i]);
+                }
+                var drop = new bool[n];
+
+                // From junction j walking in direction step: the farthest point k (within the clearance, plus the first
+                // point past it) such that every point between j and k can go.
+                void Clear(int j, int step)
+                {
+                    var along = 0f;
+                    var best = -1;
+                    for (var k = j + step; k >= 0 && k < n; k += step)
+                    {
+                        along += math.distance(points[k - step].xz, points[k].xz);
+                        if (math.abs(k - j) >= 2 && ChordHolds(j, k))
+                            best = k;
+                        if (fixedPoint[k] || along >= JunctionClearanceMeters)
+                            break;
+                    }
+                    if (best < 0)
+                        return;
+                    junctionsCleared++;
+                    for (var i = j + step; i != best; i += step)
+                        drop[i] = true;
+                }
+
+                bool ChordHolds(int a, int b)
+                {
+                    var lo = math.min(a, b);
+                    var hi = math.max(a, b);
+                    for (var i = lo + 1; i < hi; i++)
+                    {
+                        if (fixedPoint[i])
+                            return false;
+                        var start = points[lo];
+                        var chord = (points[hi] - start).xz;
+                        var t = math.saturate(math.dot((points[i] - start).xz, chord) / math.max(1e-6f, math.lengthsq(chord)));
+                        if (math.distance(points[i].xz, start.xz + chord * t) > JunctionClearancePlanMeters)
+                            return false;
+                        if (math.abs(points[i].y - math.lerp(start.y, points[hi].y, t)) > JunctionClearanceHeightMeters)
+                            return false;
+                    }
+                    return true;
+                }
+
+                for (var j = 0; j < n; j++)
+                {
+                    if (!isJunction[j])
+                        continue;
+                    if (j > 0) Clear(j, -1);
+                    if (j < n - 1) Clear(j, 1);
+                }
+
+                var keptPoints = new List<float3>(n);
+                var keptHeights = heights != null ? new List<float>(n) : null;
+                for (var i = 0; i < n; i++)
+                {
+                    if (drop[i])
+                    {
+                        dropped++;
+                        continue;
+                    }
+                    keptPoints.Add(points[i]);
+                    keptHeights?.Add(heights[i]);
+                }
+                if (keptPoints.Count == n)
+                    continue;
+                points.Clear();
+                points.AddRange(keptPoints);
+                if (keptHeights != null)
+                {
+                    way.TerrainHeights.Clear();
+                    way.TerrainHeights.AddRange(keptHeights);
+                }
+            }
+
+            Mod.log.Info($"Junction approaches: dropped {dropped} shape points within {JunctionClearanceMeters:F0} m of " +
+                         $"{junctionsCleared} junction legs (way kept within {JunctionClearancePlanMeters} m of OSM), so junction legs start with a longer edge.");
         }
 
         /// <summary>Douglas-Peucker between kept points a and b: marks the farthest point outside the tolerances, recursively.</summary>
