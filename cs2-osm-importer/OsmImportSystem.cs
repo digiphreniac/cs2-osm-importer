@@ -2698,30 +2698,128 @@ namespace cs2_osm_importer
                 // A crossing mapped on the junction node got the node's own crosswalk upgrade above, and that one
                 // outranks the legs' RemoveCrosswalk (380 path joins kept both legs' stripes). The leg kept for the
                 // crossing draws it.
-                if (EntityManager.HasComponent<Upgraded>(pair.Key))
-                {
-                    var nodeFlags = EntityManager.GetComponentData<Upgraded>(pair.Key).m_Flags;
-                    if ((nodeFlags.m_General & CompositionFlags.General.Crosswalk) != 0 ||
-                        ((nodeFlags.m_Left | nodeFlags.m_Right) & CompositionFlags.Side.AddCrosswalk) != 0)
-                    {
-                        nodeFlags.m_General &= ~CompositionFlags.General.Crosswalk;
-                        nodeFlags.m_Left &= ~CompositionFlags.Side.AddCrosswalk;
-                        nodeFlags.m_Right &= ~CompositionFlags.Side.AddCrosswalk;
-                        if (HasAnyFlags(nodeFlags))
-                            EntityManager.SetComponentData(pair.Key, new Upgraded { m_Flags = nodeFlags });
-                        else
-                            EntityManager.RemoveComponent<Upgraded>(pair.Key);
-                        nodeCrosswalksCleared++;
-                    }
-                }
+                if (ClearNodeCrosswalk(pair.Key))
+                    nodeCrosswalksCleared++;
                 if (!EntityManager.HasComponent<Updated>(pair.Key))
                     EntityManager.AddComponent<Updated>(pair.Key);
             }
 
+            var narrowCornersCleared = ThinNarrowCornerCrosswalks(junctions, chunkEntities);
+
+            Mod.log.Info($"Crosswalks at narrow corners: {narrowCornersCleared} legs cleared where two crosswalks met at under {NarrowCornerDegrees:F0} degrees" +
+                         (_narrowCornerSamples.Count > 0 ? $" (e.g. at {string.Join(", ", _narrowCornerSamples.Select(p => $"({p.x:F0}, {p.z:F0})"))})." : "."));
             Mod.log.Info($"Crosswalks at minor junctions: {legsCleared} legs cleared at {minorJunctions} junctions " +
                          $"(path joins or only minor roads), {nodeCrosswalksCleared} node crosswalks moved to a leg, {crampedLeftAlone} left alone (legs too short to draw on), {besideJunction} path joins beside an ordinary junction cleared, {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
                          $"{junctions.Count} junctions checked, {skippedUnknown} skipped (leg of an unknown way), {inheritedWays} split pieces given their neighbour's way; " +
                          $"{clock.Elapsed.TotalSeconds:F2} s.");
+        }
+
+        /// <summary>Removes the importer's own crosswalk upgrade from a node (it outranks the legs' RemoveCrosswalk).</summary>
+        private bool ClearNodeCrosswalk(Entity node)
+        {
+            if (!EntityManager.HasComponent<Upgraded>(node))
+                return false;
+            var nodeFlags = EntityManager.GetComponentData<Upgraded>(node).m_Flags;
+            if ((nodeFlags.m_General & CompositionFlags.General.Crosswalk) == 0 &&
+                ((nodeFlags.m_Left | nodeFlags.m_Right) & CompositionFlags.Side.AddCrosswalk) == 0)
+                return false;
+            nodeFlags.m_General &= ~CompositionFlags.General.Crosswalk;
+            nodeFlags.m_Left &= ~CompositionFlags.Side.AddCrosswalk;
+            nodeFlags.m_Right &= ~CompositionFlags.Side.AddCrosswalk;
+            if (HasAnyFlags(nodeFlags))
+                EntityManager.SetComponentData(node, new Upgraded { m_Flags = nodeFlags });
+            else
+                EntityManager.RemoveComponent<Upgraded>(node);
+            return true;
+        }
+
+        // Two neighbouring junction legs closer than this both draw their crosswalk right at the node, overlapping in a
+        // zig-zag (Denny Way at Stewart Street: legs 56-59 degrees apart).
+        private const float NarrowCornerDegrees = 65f;
+        private readonly List<float3> _narrowCornerSamples = new List<float3>();
+
+        private static int HighwayRank(string highway)
+        {
+            switch ((highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "motorway": case "motorway_link": return 7;
+                case "trunk": case "trunk_link": return 6;
+                case "primary": case "primary_link": return 5;
+                case "secondary": case "secondary_link": return 4;
+                case "tertiary": case "tertiary_link": return 3;
+                case "residential": case "unclassified": return 2;
+                default: return 1;
+            }
+        }
+
+        private bool LegDrawsCrosswalk(JunctionLeg leg)
+        {
+            if (!EntityManager.HasComponent<Upgraded>(leg.Edge))
+                return true;
+            var f = EntityManager.GetComponentData<Upgraded>(leg.Edge).m_Flags;
+            return ((leg.AtStart ? f.m_Left : f.m_Right) & CompositionFlags.Side.RemoveCrosswalk) == 0;
+        }
+
+        /// <summary>
+        /// Where two neighbouring road legs of a junction meet at under NarrowCornerDegrees and both draw a crosswalk,
+        /// CS2 draws both at the node and they overlap (a zig-zag of stripes). Keeps the one on the more important
+        /// road: the leg's own class first, then the class of its whole street at this junction (Denny Way at
+        /// Stewart Street keeps both Stewart crosswalks, primary on both sides, and drops Denny's, primary and
+        /// secondary). Applies to every junction, ordinary ones too. Returns how many legs were cleared.
+        /// </summary>
+        private int ThinNarrowCornerCrosswalks(Dictionary<Entity, List<JunctionLeg>> junctions, HashSet<Entity> chunkEntities)
+        {
+            var cleared = 0;
+            _narrowCornerSamples.Clear();
+            var cosLimit = math.cos(math.radians(NarrowCornerDegrees));
+            foreach (var pair in junctions)
+            {
+                // Road legs only: a tram or rail leg draws no crosswalk.
+                var roads = pair.Value.Where(l => !l.IsPath && l.Way != null && math.lengthsq(l.Direction) > 0.5f && EntityManager.HasComponent<Road>(l.Edge)).ToList();
+                if (roads.Count < 3)
+                    continue; // a road bend with a path joining: no corner between crosswalked roads
+                roads.Sort((a, b) => math.atan2(a.Direction.y, a.Direction.x).CompareTo(math.atan2(b.Direction.y, b.Direction.x)));
+                string Street(JunctionLeg l) => string.IsNullOrWhiteSpace(l.Way.Name) ? l.Way.Id.ToString() : l.Way.Name;
+                var streetRank = roads.GroupBy(Street).ToDictionary(g => g.Key, g => g.Sum(l => HighwayRank(l.Way.Highway)));
+                var changed = false;
+                for (var i = 0; i < roads.Count; i++)
+                {
+                    var a = roads[i];
+                    var b = roads[(i + 1) % roads.Count];
+                    if (math.dot(a.Direction, b.Direction) < cosLimit)
+                        continue;
+                    if (!LegDrawsCrosswalk(a) || !LegDrawsCrosswalk(b))
+                        continue;
+                    var rankA = HighwayRank(a.Way.Highway);
+                    var rankB = HighwayRank(b.Way.Highway);
+                    if (rankA == rankB)
+                    {
+                        rankA = streetRank[Street(a)];
+                        rankB = streetRank[Street(b)];
+                    }
+                    var drop = rankA < rankB || (rankA == rankB && a.Edge.Index > b.Edge.Index) ? a : b;
+                    var flags = default(CompositionFlags);
+                    if (drop.AtStart)
+                        flags.m_Left = CompositionFlags.Side.RemoveCrosswalk;
+                    else
+                        flags.m_Right = CompositionFlags.Side.RemoveCrosswalk;
+                    if (MergeUpgradedFlags(drop.Edge, flags))
+                    {
+                        cleared++;
+                        if (_narrowCornerSamples.Count < 8)
+                            _narrowCornerSamples.Add(EntityManager.GetComponentData<Node>(pair.Key).m_Position);
+                        chunkEntities.Add(drop.Edge);
+                        changed = true;
+                    }
+                }
+                if (changed)
+                {
+                    ClearNodeCrosswalk(pair.Key);
+                    if (!EntityManager.HasComponent<Updated>(pair.Key))
+                        EntityManager.AddComponent<Updated>(pair.Key);
+                }
+            }
+            return cleared;
         }
 
         private void ApplyNodeRoadServiceUpgrades(
