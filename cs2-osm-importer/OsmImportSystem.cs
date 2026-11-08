@@ -679,7 +679,8 @@ namespace cs2_osm_importer
                             if (way.UsesStructuralElevation && !way.IsPier)
                             {
                                 while (mergeEnd + 1 < way.Points.Count &&
-                                       PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))
+                                       PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f) &&
+                                       HeightsOnLine(way.Points, _pointIndex, mergeEnd + 1))
                                 {
                                     mergeEnd++;
                                 }
@@ -803,7 +804,8 @@ namespace cs2_osm_importer
                         if (way.UsesStructuralElevation && !way.IsPier)
                         {
                             while (mergeEnd + 1 < way.Points.Count &&
-                                   PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f))
+                                   PointsAreCollinear(way.Points[mergeEnd - 1], way.Points[mergeEnd], way.Points[mergeEnd + 1], 0.999f) &&
+                                       HeightsOnLine(way.Points, _pointIndex, mergeEnd + 1))
                             {
                                 mergeEnd++;
                             }
@@ -1493,6 +1495,34 @@ namespace cs2_osm_importer
             return dx * dx + dz * dz;
         }
 
+        // A structural way's points are merged into one course only while their heights stay this close to a straight
+        // line between the course's ends.
+        private const float StructuralMergeHeightTolerance = 0.5f;
+
+        /// <summary>
+        /// Whether every point strictly between from and to lies within StructuralMergeHeightTolerance of the straight
+        /// height line from points[from] to points[to] (by distance along the way). The collinear merge checked the
+        /// plan only: the Aurora Bridge, nearly straight from above, became one 895 m course from the ground at one end to
+        /// the ground at the other, and its deck (up to 75 m) was lost.
+        /// </summary>
+        private static bool HeightsOnLine(List<float3> points, int from, int to)
+        {
+            var total = 0f;
+            for (var i = from + 1; i <= to; i++)
+                total += math.distance(points[i - 1].xz, points[i].xz);
+            if (total < 0.01f)
+                return true;
+            var along = 0f;
+            for (var i = from + 1; i < to; i++)
+            {
+                along += math.distance(points[i - 1].xz, points[i].xz);
+                var expected = math.lerp(points[from].y, points[to].y, along / total);
+                if (math.abs(points[i].y - expected) > StructuralMergeHeightTolerance)
+                    return false;
+            }
+            return true;
+        }
+
         private static bool PointsAreCollinear(float3 prev, float3 mid, float3 next, float cosAngle)
         {
             var d1 = new float2(mid.x - prev.x, mid.z - prev.z);
@@ -1812,6 +1842,13 @@ namespace cs2_osm_importer
 
             var tangent = length > 0.001f ? delta / 3f : new float3(0f, 0f, 0f);
 
+            // Height above the ground at each end. With 0 here CS2 treats the course as a ground road: the nodes it adds
+            // when it splits a long course land near the ground (the Aurora Bridge's 547 m span sagged from 67 m to
+            // 12 m). With the real height every split node stays on the course, with pillars or as a tunnel (verified
+            // with the bridge's bridge_course_test). Within CourseGroundToleranceMeters of the ground counts as on it;
+            // both courses at a shared point get the same value, so joins are unaffected.
+            var elevation = new float2(HeightAboveGround(start), HeightAboveGround(end));
+
             // One entity with every component at once: four AddComponentData calls are four structural changes each,
             // 10.9 s for full Seattle's 201k definitions in one frame.
             if (!_courseDefinitionArchetype.Valid)
@@ -1840,7 +1877,7 @@ namespace cs2_osm_importer
                     m_Entity = Entity.Null,
                     m_Position = start,
                     m_Rotation = quaternion.identity,
-                    m_Elevation = float2.zero,
+                    m_Elevation = new float2(elevation.x, elevation.x),
                     m_CourseDelta = 0f,
                     m_SplitPosition = 0f,
                     m_Flags = CoursePosFlags.IsFirst,
@@ -1851,14 +1888,14 @@ namespace cs2_osm_importer
                     m_Entity = Entity.Null,
                     m_Position = end,
                     m_Rotation = quaternion.identity,
-                    m_Elevation = float2.zero,
+                    m_Elevation = new float2(elevation.y, elevation.y),
                     m_CourseDelta = 1f,
                     m_SplitPosition = 1f,
                     m_Flags = CoursePosFlags.IsLast,
                     m_ParentMesh = -1
                 },
                 m_Curve = new Bezier4x3(start, start + tangent, end - tangent, end),
-                m_Elevation = float2.zero,
+                m_Elevation = elevation,
                 m_Length = length
             });
             EntityManager.SetComponentData(entity, new OsmImportDefinition { SessionId = _sessionId });
@@ -1867,6 +1904,14 @@ namespace cs2_osm_importer
         }
 
         private EntityArchetype _courseDefinitionArchetype;
+
+        private const float CourseGroundToleranceMeters = 1f;
+
+        private float HeightAboveGround(float3 p)
+        {
+            var h = p.y - SampleTerrainHeight(new float3(p.x, 0f, p.z));
+            return math.abs(h) < CourseGroundToleranceMeters ? 0f : h;
+        }
 
         private void LogRoundaboutDiagnostics(OsmWay way)
         {
