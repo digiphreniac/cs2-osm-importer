@@ -2405,7 +2405,7 @@ namespace cs2_osm_importer
         // A road point this close to the snap position is reused instead of inserting a new one.
         private const float RoadPointReuseMeters = 2f;
         // Crosswalk features this close to a road junction are dropped: the junction draws its own crosswalks.
-        private const float JunctionCrosswalkRadiusMeters = 12f;
+        private const float JunctionCrosswalkRadiusMeters = 16f;
 
         private static bool IsPedestrianDetailFootway(OsmWay way)
         {
@@ -3727,7 +3727,7 @@ namespace cs2_osm_importer
 
         // Shape points closer than this (along the way) to a junction are dropped, so each junction leg starts with one
         // edge long enough for CS2 to shape the junction's corners.
-        private const float JunctionClearanceMeters = 8f;
+        private const float JunctionClearanceMeters = 16f;
         // ... as long as the way stays within this of its OSM line (plan) and of its height profile.
         private const float JunctionClearancePlanMeters = 0.5f;
         private const float JunctionClearanceHeightMeters = 0.5f;
