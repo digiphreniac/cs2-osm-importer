@@ -47,7 +47,8 @@ namespace cs2_osm_importer
             QueueRoundabouts,
             WaitForGameApply,
             RemoveIntersectingPillars,
-            DeleteRoads
+            DeleteRoads,
+            WaitForSeaLevel
         }
 
         private enum ApplyWaitPurpose
@@ -392,6 +393,9 @@ namespace cs2_osm_importer
                 case WorkPhase.QueueDefinitions:
                     ProcessGenerationBatch();
                     break;
+                case WorkPhase.WaitForSeaLevel:
+                    ProcessSeaWait();
+                    break;
                 case WorkPhase.QueueRoundaboutConnectors:
                     ProcessRoundaboutConnectorBatch();
                     break;
@@ -632,9 +636,9 @@ namespace cs2_osm_importer
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
                 Mod.log.Info($"Baseline edge count before OSM road generation: {_baselineEdgeCount}");
-                _phase = _roundaboutConnectorWays.Count > 0
+                _phase = SeaWaitOr(_roundaboutConnectorWays.Count > 0
                     ? WorkPhase.QueueRoundaboutConnectors
-                    : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply);
+                    : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply));
                 SetStatus(L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 _loggedFirstQueuedSegment = false;
             }

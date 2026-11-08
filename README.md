@@ -61,7 +61,10 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   map's. A lake at or below it gets no water sources of its own: the sea fills it (in the Seattle heightmap, Lake
   Union, Portage Bay and the Ship Canal sit at 0 m together with Puget Sound, so they only have water once the sea
   level is set above 0). Pier decks and shore paths are placed at generation from the lake or sea level, whichever is
-  higher, so changing the sea level afterwards leaves them too low or too high.
+  higher, so changing the sea level afterwards leaves them too low or too high. The water takes a few minutes to rise
+  after the sea level is set; when piers stand in the sea, Generate waits for it ("Waiting for the sea to rise") before
+  building, because the game would otherwise put some pier nodes on the still-rising water and the piers would end up
+  under it. The wait gives up after 10 minutes with a log warning.
 - **Raised shore paths add node offsets.** Paths along a lake shore that the heightmap's lake bed reaches under are
   raised 1 m above the water. With a higher water level more of them are raised, and the connectivity scan reports
   more nodes the game moved a few meters ("offset"): on the Lake Union test area 186 instead of 157 with the sea level

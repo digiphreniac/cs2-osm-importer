@@ -139,6 +139,7 @@
   "OsmImporter.Status.GenerationSelected": "Generating selected OSM roads...",
   "OsmImporter.Status.GeneratingPrepared": "Preparing road generation...",
   "OsmImporter.Status.GeneratingRoads": "generating...",
+  "OsmImporter.Status.WaitingForSea": "Waiting for the sea to rise ({0:F1} of {1:F1} m)...",
   "OsmImporter.Status.LoadingWithWarning": "loading... (game might be frozen for some time)",
   "OsmImporter.Status.LoadBeforeGenerate": "Load OSM data before generating roads.",
   "OsmImporter.Status.LoadComplete": "Loaded {0} OSM ways. Select road types and click Generate.",
