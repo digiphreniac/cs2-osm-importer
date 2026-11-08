@@ -2355,6 +2355,13 @@ namespace cs2_osm_importer
 
         private static bool IsCramped(JunctionLeg leg) => leg.Length < MinCrosswalkLegMeters && leg.OtherEndIsJunction;
 
+        // The importer's own crosswalk upgrade on a node (a mapped crossing right at it).
+        private bool HasNodeCrosswalk(Entity node)
+        {
+            return EntityManager.HasComponent<Upgraded>(node) &&
+                   (EntityManager.GetComponentData<Upgraded>(node).m_Flags.m_General & CompositionFlags.General.Crosswalk) != 0;
+        }
+
         private static bool IsSideRoad(string highway)
         {
             switch ((highway ?? string.Empty).ToLowerInvariant())
@@ -2611,6 +2618,7 @@ namespace cs2_osm_importer
             var legsCleared = 0;
             var nodeCrosswalksCleared = 0;
             var crampedLeftAlone = 0;
+            var pathJoinCrossingsKept = 0;
             var besideJunction = 0;
 
             // Minor: a path joining a road; an alley, driveway, track or a road without sidewalks meeting anything;
@@ -2656,6 +2664,14 @@ namespace cs2_osm_importer
                 if (!IsMinor(legs))
                     continue;
                 minorJunctions++;
+                // A path join carrying a mapped crossing keeps the importer's crosswalk on the node: it draws one
+                // crosswalk across the road where the path crosses. Moved onto one leg it drew nothing (the trails'
+                // crossing on the Volunteer Park ring, checked with set_upgraded).
+                if (pathJoin && HasNodeCrosswalk(pair.Key))
+                {
+                    pathJoinCrossingsKept++;
+                    continue;
+                }
                 // A path join keeps at most one crosswalk, on the leg nearest a crossing. A driveway with one crossing
                 // for the cycleway and another for the sidewalk 6 m away kept both.
                 var keepHere = new HashSet<(Entity, bool)>(roadLegs.Select(l => (l.Edge, l.AtStart)).Where(kept.ContainsKey));
@@ -2709,7 +2725,7 @@ namespace cs2_osm_importer
             Mod.log.Info($"Crosswalks at narrow corners: {narrowCornersCleared} legs cleared where two crosswalks met at under {NarrowCornerDegrees:F0} degrees" +
                          (_narrowCornerSamples.Count > 0 ? $" (e.g. at {string.Join(", ", _narrowCornerSamples.Select(p => $"({p.x:F0}, {p.z:F0})"))})." : "."));
             Mod.log.Info($"Crosswalks at minor junctions: {legsCleared} legs cleared at {minorJunctions} junctions " +
-                         $"(path joins or only minor roads), {nodeCrosswalksCleared} node crosswalks moved to a leg, {crampedLeftAlone} left alone (legs too short to draw on), {besideJunction} path joins beside an ordinary junction cleared, {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
+                         $"(path joins or only minor roads), {nodeCrosswalksCleared} node crosswalks moved to a leg, {crampedLeftAlone} left alone (legs too short to draw on), {pathJoinCrossingsKept} path crossings kept on their node, {besideJunction} path joins beside an ordinary junction cleared, {kept.Count} legs kept for {crossingsUsed} mapped crossings; " +
                          $"{junctions.Count} junctions checked, {skippedUnknown} skipped (leg of an unknown way), {inheritedWays} split pieces given their neighbour's way; " +
                          $"{clock.Elapsed.TotalSeconds:F2} s.");
         }

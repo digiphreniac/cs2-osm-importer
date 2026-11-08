@@ -2673,6 +2673,7 @@ namespace cs2_osm_importer
 
             var moved = 0;
             var merged = 0;
+            var featuresMoved = 0;
             foreach (var road in roads)
             {
                 var pts = road.Points;
@@ -2751,11 +2752,39 @@ namespace cs2_osm_importer
                                 path.TerrainHeights[idx] = target.y;
                             moved++;
                         }
+                    // The crossing, stop sign or signal mapped where a path met the road belongs to that crossing:
+                    // it moves with the join. Left behind, a stop sign 10.9 m from the ring's north junction drew two
+                    // stop lines across the road where no path crossed any more. A mapped crossing dropped as being
+                    // near the junction becomes the moved join's own crosswalk.
+                    var oldPoints = g.Select(j => pts[pts.FindIndex(q => PointKey(q.xz) == j.Key)].xz).ToList();
+                    bool AtOldJoin(float3 f) => oldPoints.Any(o => math.distance(o, f.xz) < 0.06f);
+                    // A stop sign mapped for a path crossing drew two stop lines across the road (and no crosswalk):
+                    // dropped, the crossing gets a crosswalk instead.
+                    featuresMoved += road.StopSigns.RemoveAll(f => AtOldJoin(f.Position));
+                    foreach (var list in new[] { road.Crosswalks, road.TrafficLights })
+                    {
+                        var hits = list.Where(f => AtOldJoin(f.Position)).ToList();
+                        list.RemoveAll(hits.Contains);
+                        if (hits.Count > 0)
+                        {
+                            hits[0].Position = target;
+                            list.Add(hits[0]);
+                            featuresMoved++;
+                        }
+                    }
+                    var junctionHit = road.JunctionCrossings.FirstOrDefault(f => AtOldJoin(f.Position));
+                    if (junctionHit != null && !road.Crosswalks.Any(f => math.distance(f.Position.xz, target.xz) < 0.06f))
+                    {
+                        road.JunctionCrossings.Remove(junctionHit);
+                        junctionHit.Position = target;
+                        road.Crosswalks.Add(junctionHit);
+                        featuresMoved++;
+                    }
                     if (g.Count > 1)
                         merged += g.Count - 1;
                 }
             }
-            Mod.log.Info($"Path joins: {moved} path ends moved, {merged} joins merged into a neighbour within {PathJoinMergeMeters:F0} m; " +
+            Mod.log.Info($"Path joins: {moved} path ends moved, {merged} joins merged into a neighbour within {PathJoinMergeMeters:F0} m, {featuresMoved} crossings/stop signs/signals moved with them; " +
                          $"joins kept {PathJoinJunctionClearanceMeters:F0} m from road junctions.");
         }
 
@@ -4023,6 +4052,9 @@ namespace cs2_osm_importer
         private const float JunctionClearanceMeters = 16f;
         // ... as long as the way stays within this of its OSM line (plan) and of its height profile.
         private const float JunctionClearancePlanMeters = 0.5f;
+        // ... or within this where a point would otherwise stay closer than CrampedLegMeters to the junction.
+        private const float CrampedClearancePlanMeters = 1.5f;
+        private const float CrampedLegMeters = 14f;
         private const float JunctionClearanceHeightMeters = 0.5f;
 
         /// <summary>
@@ -4091,15 +4123,16 @@ namespace cs2_osm_importer
                 // point past it) such that every point between j and k can go.
                 void Clear(int j, int step)
                 {
-                    var along = 0f;
-                    var best = -1;
-                    for (var k = j + step; k >= 0 && k < n; k += step)
+                    var best = FarthestClear(j, step, JunctionClearancePlanMeters);
+                    // A tight curve (the Volunteer Park ring, 33 m radius) keeps a point a few metres from the junction
+                    // at the normal tolerance, too close for CS2 to shape the junction's corner. Only there, allow
+                    // the wider tolerance.
+                    var first = best >= 0 ? best : j + step;
+                    if (first >= 0 && first < n && math.distance(points[first].xz, points[j].xz) < CrampedLegMeters)
                     {
-                        along += math.distance(points[k - step].xz, points[k].xz);
-                        if (math.abs(k - j) >= 2 && ChordHolds(j, k))
-                            best = k;
-                        if (fixedPoint[k] || along >= JunctionClearanceMeters)
-                            break;
+                        var wide = FarthestClear(j, step, CrampedClearancePlanMeters);
+                        if (wide >= 0)
+                            best = wide;
                     }
                     if (best < 0)
                         return;
@@ -4108,7 +4141,22 @@ namespace cs2_osm_importer
                         drop[i] = true;
                 }
 
-                bool ChordHolds(int a, int b)
+                int FarthestClear(int j, int step, float planTolerance)
+                {
+                    var along = 0f;
+                    var best = -1;
+                    for (var k = j + step; k >= 0 && k < n; k += step)
+                    {
+                        along += math.distance(points[k - step].xz, points[k].xz);
+                        if (math.abs(k - j) >= 2 && ChordHolds(j, k, planTolerance))
+                            best = k;
+                        if (fixedPoint[k] || along >= JunctionClearanceMeters)
+                            break;
+                    }
+                    return best;
+                }
+
+                bool ChordHolds(int a, int b, float planTolerance)
                 {
                     var lo = math.min(a, b);
                     var hi = math.max(a, b);
@@ -4119,7 +4167,7 @@ namespace cs2_osm_importer
                         var start = points[lo];
                         var chord = (points[hi] - start).xz;
                         var t = math.saturate(math.dot((points[i] - start).xz, chord) / math.max(1e-6f, math.lengthsq(chord)));
-                        if (math.distance(points[i].xz, start.xz + chord * t) > JunctionClearancePlanMeters)
+                        if (math.distance(points[i].xz, start.xz + chord * t) > planTolerance)
                             return false;
                         if (math.abs(points[i].y - math.lerp(start.y, points[hi].y, t)) > JunctionClearanceHeightMeters)
                             return false;
