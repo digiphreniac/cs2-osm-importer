@@ -87,6 +87,7 @@ namespace cs2_osm_importer
         private static void ApplyGradeLimitedElevations(List<OsmWay> ways)
         {
             var graph = new GradeGraph();
+            var plans = PlanStructures(ways);
             var wayNodes = new List<(OsmWay Way, int[] Nodes)>();
             foreach (var way in ways)
             {
@@ -106,11 +107,17 @@ namespace cs2_osm_importer
                     if (i > 0)
                         along += math.distance(pts[i - 1].xz, pts[i].xz);
                     float reference;
-                    if (structural)
+                    var pointTarget = target;
+                    if (plans.TryGetValue(way, out var plan))
+                    {
+                        reference = plan.Reference[i];
+                        pointTarget = plan.Target[i];
+                    }
+                    else if (structural)
                         reference = math.lerp(heights[0], heights[pts.Count - 1], total > 0.01f ? along / total : 0f);
                     else
                         reference = heights != null ? heights[i] : pts[i].y - target;
-                    nodes[i] = graph.Node(pts[i], reference, structural, target, i > 0 && i < pts.Count - 1);
+                    nodes[i] = graph.Node(pts[i], reference, structural, pointTarget, i > 0 && i < pts.Count - 1);
                 }
                 var grade = MaxGrade(way);
                 for (var i = 1; i < pts.Count; i++)
