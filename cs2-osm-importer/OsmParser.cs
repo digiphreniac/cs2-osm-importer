@@ -300,6 +300,7 @@ namespace cs2_osm_importer
             timer.Mark("roundabouts");
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions,
                 id => nodes.TryGetValue(id, out var n) && IsUnmarkedCrossingNode(n.Tags));
+            SquarePathApproaches(finalWays);
             timer.Mark("pedestrianDetails");
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
@@ -2563,42 +2564,8 @@ namespace cs2_osm_importer
                 }
             }
 
-            // Road junction points as the roads will queue them, to join paths that land right beside one onto it.
-            var junctionRoadPoints = new Dictionary<(int, int), float3>();
-            foreach (var road in roads)
-                foreach (var rp in road.Points)
-                {
-                    var key = PointKey(rp.xz);
-                    if (junctionKeys.Contains(key) && !junctionRoadPoints.ContainsKey(key))
-                        junctionRoadPoints[key] = rp;
-                }
-            bool TryNearbyJunction(float3 at, out float3 junction)
-            {
-                junction = default;
-                var best = PathJoinToJunctionMeters;
-                var cx = (int)math.floor(at.x / 16f);
-                var cz = (int)math.floor(at.z / 16f);
-                for (var dx = -1; dx <= 1; dx++)
-                    for (var dz = -1; dz <= 1; dz++)
-                    {
-                        if (!junctionGrid.TryGetValue((cx + dx, cz + dz), out var cell))
-                            continue;
-                        foreach (var q in cell)
-                        {
-                            var d = math.distance(q, at.xz);
-                            if (d < best && d > 0.01f && junctionRoadPoints.TryGetValue(PointKey(q), out var rp))
-                            {
-                                best = d;
-                                junction = rp;
-                            }
-                        }
-                    }
-                return best < PathJoinToJunctionMeters;
-            }
-
             // Real paths that ended on a dropped detail: extend them onto the road.
             var snappedToCrossing = 0;
-            var joinedAtJunction = 0;
             var snappedToRoad = 0;
             var leftUnsnapped = 0;
             foreach (var path in ways)
@@ -2632,14 +2599,6 @@ namespace cs2_osm_importer
                         continue;
                     }
 
-                    // A path landing a few metres from a road junction joins at the junction itself. Its own junction
-                    // there sat inside the road junction's footprint (2.8 and 5.4 m from Volunteer Park's entrance),
-                    // and CS2 drew the path's paving across the lanes to the centre line.
-                    if (TryNearbyJunction(target, out var junctionPoint))
-                    {
-                        target = junctionPoint;
-                        joinedAtJunction++;
-                    }
                     if (math.distance(target.xz, endPoint.xz) < 0.01f)
                         continue;
                     if (end == 0)
@@ -2658,12 +2617,163 @@ namespace cs2_osm_importer
             Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
                          $"{crosswalksAdded} crosswalk upgrades added from crossing ways ({crosswalksUnmarked} unmarked skipped), {crosswalksDroppedNearJunction} dropped near junctions, " +
                          $"{crosswalksMerged} merged into a crosswalk within {CrosswalkMergeMeters:F0} m; " +
-                         $"paths extended onto roads: {snappedToCrossing} at crossings, {joinedAtJunction} moved onto a road junction within {PathJoinToJunctionMeters:F0} m, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
+                         $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
             return ways.Where(w => !detailSet.Contains(w)).ToList();
         }
 
-        // A path that would join a road this close to a road junction joins at the junction instead.
-        private const float PathJoinToJunctionMeters = 6f;
+        // A path joining a road ends with a straight piece this long, square to the road.
+        private const float PathApproachMeters = 15f;
+        // ... but never shorter than this; a shorter one is left as it is.
+        private const float MinPathApproachMeters = 8f;
+
+        /// <summary>
+        /// Where a footpath joins a road mid-block, CS2 hides the path's last piece under the road only when that piece
+        /// is long enough to start outside the road. A short last piece (OSM's kerb point, 6-7 m from the centre line)
+        /// next to a road junction had its paving drawn across the sidewalk and lanes (Volunteer Park's entrance;
+        /// reproduced on empty land with the bridge's path_join_test: a 7 m path 5 m from a T-junction shows it, a
+        /// 15 m one square to the road does not, even 3 m from the junction or at 60 degrees). So every path end on a
+        /// road point gets a last piece PathApproachMeters long, straight out from the road: the path's points
+        /// closer than that are dropped and one point is put square to the road. Points another way uses are kept (the
+        /// approach is shortened to stop before them). Ends at a road junction, where "square" has no single meaning,
+        /// are left as they are.
+        /// </summary>
+        private static void SquarePathApproaches(List<OsmWay> ways)
+        {
+            var roads = ways.Where(IsVehicleRoad).ToList();
+            var roadAt = new Dictionary<(int, int), List<(OsmWay Road, int Index)>>();
+            foreach (var road in roads)
+                for (var i = 0; i < road.Points.Count; i++)
+                {
+                    var key = PointKey(road.Points[i].xz);
+                    if (!roadAt.TryGetValue(key, out var list))
+                        roadAt[key] = list = new List<(OsmWay, int)>();
+                    list.Add((road, i));
+                }
+            var useCount = new Dictionary<(int, int), int>();
+            foreach (var w in ways)
+                foreach (var key in w.Points.Select(pt => PointKey(pt.xz)).Distinct())
+                    useCount[key] = useCount.TryGetValue(key, out var c) ? c + 1 : 1;
+
+            // Path points on a 1 m grid: a new square point within 1 m of one takes it over, so two paths reaching the
+            // same road point from the same side share one point instead of leaving two nodes centimetres apart.
+            var pathPointGrid = new Dictionary<(int, int), List<float3>>();
+            (int, int) Cell1(float2 q) => ((int)math.floor(q.x), (int)math.floor(q.y));
+            void AddPathPoint(float3 q)
+            {
+                var c = Cell1(q.xz);
+                if (!pathPointGrid.TryGetValue(c, out var l))
+                    pathPointGrid[c] = l = new List<float3>();
+                l.Add(q);
+            }
+            bool TryPathPointNear(float3 q, out float3 found)
+            {
+                found = default;
+                var best = 1f;
+                var c = Cell1(q.xz);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                        if (pathPointGrid.TryGetValue((c.Item1 + dx, c.Item2 + dz), out var l))
+                            foreach (var cand in l)
+                            {
+                                var d = math.distance(cand.xz, q.xz);
+                                if (d < best)
+                                {
+                                    best = d;
+                                    found = cand;
+                                }
+                            }
+                return best < 1f;
+            }
+            foreach (var w in ways)
+                if (IsPathLike(w))
+                    foreach (var q in w.Points)
+                        AddPathPoint(q);
+
+            var squared = 0;
+            var snappedToPathPoint = 0;
+            var skippedShort = 0;
+            foreach (var path in ways)
+            {
+                if (!IsPathLike(path) || path.Points.Count < 2)
+                    continue;
+                for (var end = 0; end < 2; end++)
+                {
+                    var pts = path.Points;
+                    var n = pts.Count;
+                    var endIndex = end == 0 ? 0 : n - 1;
+                    var step = end == 0 ? 1 : -1;
+                    var endPoint = pts[endIndex];
+                    if (!roadAt.TryGetValue(PointKey(endPoint.xz), out var onRoads))
+                        continue;
+                    if (onRoads.Select(r => r.Road).Distinct().Count() > 1 ||
+                        onRoads[0].Index == 0 || onRoads[0].Index == onRoads[0].Road.Points.Count - 1)
+                        continue; // a road junction or a road end
+                    var (road, ri) = onRoads[0];
+                    var roadDir = math.normalizesafe(road.Points[ri + 1].xz - road.Points[ri - 1].xz);
+                    var normal = new float2(-roadDir.y, roadDir.x);
+                    var side = math.dot(pts[endIndex + step].xz - endPoint.xz, normal) >= 0f ? 1f : -1f;
+
+                    // How far out the approach can go: up to the first point another way uses, and within the path.
+                    var length = PathApproachMeters;
+                    var along = 0f;
+                    var firstKept = -1; // first path point (walking from the road) at or beyond the approach length
+                    for (var k = endIndex + step; k >= 0 && k < n; k += step)
+                    {
+                        along += math.distance(pts[k - step].xz, pts[k].xz);
+                        var shared = useCount.TryGetValue(PointKey(pts[k].xz), out var uses) && uses > 1;
+                        var isWayEnd = k == 0 || k == n - 1;
+                        if (shared || isWayEnd)
+                        {
+                            length = math.min(length, 0.9f * math.distance(pts[k].xz, endPoint.xz));
+                            firstKept = k;
+                            break;
+                        }
+                        if (math.distance(pts[k].xz, endPoint.xz) >= length)
+                        {
+                            firstKept = k;
+                            break;
+                        }
+                    }
+                    if (firstKept < 0 || length < MinPathApproachMeters)
+                    {
+                        skippedShort++;
+                        continue;
+                    }
+
+                    var outXz = endPoint.xz + normal * side * length;
+                    var t = math.saturate(length / math.max(0.01f, math.distance(pts[firstKept].xz, endPoint.xz)));
+                    var outPoint = new float3(outXz.x, math.lerp(endPoint.y, pts[firstKept].y, t), outXz.y);
+                    var heights = path.TerrainHeights.Count == n ? path.TerrainHeights : null;
+                    var outHeight = heights != null ? math.lerp(heights[endIndex], heights[firstKept], t) : outPoint.y;
+                    if (TryPathPointNear(outPoint, out var existing))
+                    {
+                        outPoint = existing;
+                        outHeight = existing.y;
+                        snappedToPathPoint++;
+                    }
+                    else
+                    {
+                        AddPathPoint(outPoint);
+                    }
+
+                    // Drop the points between the road and firstKept, then put the square point there.
+                    var lo = math.min(endIndex, firstKept);
+                    var hi = math.max(endIndex, firstKept);
+                    var removeFrom = lo + 1;
+                    var removeCount = hi - lo - 1;
+                    if (removeCount > 0)
+                    {
+                        pts.RemoveRange(removeFrom, removeCount);
+                        heights?.RemoveRange(removeFrom, removeCount);
+                    }
+                    pts.Insert(removeFrom, outPoint);
+                    heights?.Insert(removeFrom, outHeight);
+                    squared++;
+                }
+            }
+            Mod.log.Info($"Path approaches: {squared} path ends on a road given a {PathApproachMeters:F0} m piece square to the road ({snappedToPathPoint} sharing another path's point) " +
+                         $"({skippedShort} left as they were: too short or another way within {MinPathApproachMeters:F0} m).");
+        }
 
         // Crosswalks closer than this along one road (with no junction between them) become one.
         private const float CrosswalkMergeMeters = 20f;
