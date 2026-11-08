@@ -300,6 +300,7 @@ namespace cs2_osm_importer
             timer.Mark("roundabouts");
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions,
                 id => nodes.TryGetValue(id, out var n) && IsUnmarkedCrossingNode(n.Tags));
+            RelocatePathJoins(finalWays);
             SquarePathApproaches(finalWays);
             timer.Mark("pedestrianDetails");
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
@@ -2621,6 +2622,143 @@ namespace cs2_osm_importer
             return ways.Where(w => !detailSet.Contains(w)).ToList();
         }
 
+        // Path joins on one road closer than this become one, at their average position.
+        private const float PathJoinMergeMeters = 8f;
+        // A path join is kept at least this far (along the road) from a road junction.
+        private const float PathJoinJunctionClearanceMeters = 16f;
+
+        /// <summary>
+        /// Each footpath joining a road mid-block is a junction of its own. Where several joined within a few metres
+        /// (two trails 3.5 m apart on the Volunteer Park ring: two sets of misaligned markings), or a few metres from a
+        /// road junction (2.8-10.8 m at the ring's entrance and north junction: the road junction had no room for its
+        /// corners, so sidewalks ran across the junction's mouth), the roads around them could not be built cleanly.
+        /// On each road: joins within PathJoinMergeMeters of each other become one at their average position along the
+        /// road, and a join is moved to PathJoinJunctionClearanceMeters from the nearest road junction (to the middle
+        /// of the stretch between two junctions closer than twice that). Every path end at a moved join follows it.
+        /// Runs before SquarePathApproaches, which then brings the paths in square.
+        /// </summary>
+        private static void RelocatePathJoins(List<OsmWay> ways)
+        {
+            var roads = ways.Where(IsVehicleRoad).ToList();
+            var roadAt = new Dictionary<(int, int), List<(OsmWay Road, int Index)>>();
+            foreach (var road in roads)
+                for (var i = 0; i < road.Points.Count; i++)
+                {
+                    var key = PointKey(road.Points[i].xz);
+                    if (!roadAt.TryGetValue(key, out var list))
+                        roadAt[key] = list = new List<(OsmWay, int)>();
+                    list.Add((road, i));
+                }
+            bool IsRoadJunction((int, int) key) => roadAt.TryGetValue(key, out var l) && l.Select(r => r.Road).Distinct().Count() > 1;
+
+            // Path ends sitting on a road's interior point (not a road junction or road end), per road point.
+            var endsAt = new Dictionary<(int, int), List<(OsmWay Path, int End)>>();
+            foreach (var path in ways)
+            {
+                if (!IsPathLike(path) || path.Points.Count < 2)
+                    continue;
+                for (var end = 0; end < 2; end++)
+                {
+                    var key = PointKey((end == 0 ? path.Points[0] : path.Points[path.Points.Count - 1]).xz);
+                    if (!roadAt.TryGetValue(key, out var on) || IsRoadJunction(key))
+                        continue;
+                    var (road, ri) = on[0];
+                    if (ri == 0 || ri == road.Points.Count - 1)
+                        continue;
+                    if (!endsAt.TryGetValue(key, out var list))
+                        endsAt[key] = list = new List<(OsmWay, int)>();
+                    list.Add((path, end));
+                }
+            }
+
+            var moved = 0;
+            var merged = 0;
+            foreach (var road in roads)
+            {
+                var pts = road.Points;
+                var along = new float[pts.Count];
+                for (var i = 1; i < pts.Count; i++)
+                    along[i] = along[i - 1] + math.distance(pts[i - 1].xz, pts[i].xz);
+                var joins = new List<(int Index, (int, int) Key)>();
+                var junctionAlong = new List<float>();
+                for (var i = 0; i < pts.Count; i++)
+                {
+                    var key = PointKey(pts[i].xz);
+                    if (endsAt.ContainsKey(key) && roadAt[key][0].Road == road)
+                        joins.Add((i, key));
+                    if (IsRoadJunction(key))
+                        junctionAlong.Add(along[i]);
+                }
+                if (joins.Count == 0)
+                    continue;
+
+                // Group joins closer than PathJoinMergeMeters (no road junction between them).
+                var groups = new List<List<(int Index, (int, int) Key)>>();
+                foreach (var j in joins)
+                {
+                    var last = groups.Count > 0 ? groups[groups.Count - 1] : null;
+                    if (last != null && along[j.Index] - along[last[last.Count - 1].Index] <= PathJoinMergeMeters &&
+                        !junctionAlong.Any(a => a > along[last[last.Count - 1].Index] && a < along[j.Index]))
+                        last.Add(j);
+                    else
+                        groups.Add(new List<(int Index, (int, int) Key)> { j });
+                }
+
+                // Each group's target position along the road, worked out before any point is inserted.
+                var targets = new List<(List<(int Index, (int, int) Key)> Group, float S)>();
+                foreach (var g in groups)
+                {
+                    var s = g.Average(j => along[j.Index]);
+                    var before = junctionAlong.Where(a => a <= s).DefaultIfEmpty(float.NaN).Max();
+                    var after = junctionAlong.Where(a => a >= s).DefaultIfEmpty(float.NaN).Min();
+                    var lo = float.IsNaN(before) ? float.NegativeInfinity : before + PathJoinJunctionClearanceMeters;
+                    var hi = float.IsNaN(after) ? float.PositiveInfinity : after - PathJoinJunctionClearanceMeters;
+                    if (lo > hi)
+                        s = float.IsNaN(before) || float.IsNaN(after) ? s : (before + after) * 0.5f;
+                    else
+                        s = math.clamp(s, lo, hi);
+                    s = math.clamp(s, 0.5f, along[pts.Count - 1] - 0.5f);
+                    targets.Add((g, s));
+                }
+
+                // Highest position first, so inserting a point never shifts a later target's segment.
+                foreach (var (g, s) in targets.OrderByDescending(t => t.S))
+                {
+                    if (g.Count == 1 && math.abs(along[g[0].Index] - s) < 0.5f)
+                        continue;
+                    var seg = 1;
+                    while (seg < pts.Count - 1 && along[seg] < s)
+                        seg++;
+                    float3 target;
+                    if (math.abs(along[seg] - s) < 0.5f && seg < pts.Count - 1 && !IsRoadJunction(PointKey(pts[seg].xz)))
+                        target = pts[seg];
+                    else if (math.abs(along[seg - 1] - s) < 0.5f && seg - 1 > 0 && !IsRoadJunction(PointKey(pts[seg - 1].xz)))
+                        target = pts[seg - 1];
+                    else
+                    {
+                        var t = (s - along[seg - 1]) / math.max(0.01f, along[seg] - along[seg - 1]);
+                        target = math.lerp(pts[seg - 1], pts[seg], t);
+                        if (road.TerrainHeights.Count == pts.Count)
+                            road.TerrainHeights.Insert(seg, math.lerp(road.TerrainHeights[seg - 1], road.TerrainHeights[seg], t));
+                        pts.Insert(seg, target);
+                    }
+                    foreach (var j in g)
+                        foreach (var (path, end) in endsAt[j.Key])
+                        {
+                            var idx = end == 0 ? 0 : path.Points.Count - 1;
+                            path.Points[idx] = target;
+                            if (path.TerrainHeights.Count == path.Points.Count)
+                                path.TerrainHeights[idx] = target.y;
+                            moved++;
+                        }
+                    if (g.Count > 1)
+                        merged += g.Count - 1;
+                }
+            }
+            Mod.log.Info($"Path joins: {moved} path ends moved, {merged} joins merged into a neighbour within {PathJoinMergeMeters:F0} m; " +
+                         $"joins kept {PathJoinJunctionClearanceMeters:F0} m from road junctions.");
+        }
+
         // A path joining a road ends with a straight piece this long, square to the road.
         private const float PathApproachMeters = 15f;
         // ... but never shorter than this; a shorter one is left as it is.
@@ -2654,7 +2792,7 @@ namespace cs2_osm_importer
                 foreach (var key in w.Points.Select(pt => PointKey(pt.xz)).Distinct())
                     useCount[key] = useCount.TryGetValue(key, out var c) ? c + 1 : 1;
 
-            // Path points on a 1 m grid: a new square point within 1 m of one takes it over, so two paths reaching the
+            // Path points on a 1 m grid: a new square point within 2 m of one takes it over, so two paths reaching the
             // same road point from the same side share one point instead of leaving two nodes centimetres apart.
             var pathPointGrid = new Dictionary<(int, int), List<float3>>();
             (int, int) Cell1(float2 q) => ((int)math.floor(q.x), (int)math.floor(q.y));
@@ -2668,7 +2806,7 @@ namespace cs2_osm_importer
             bool TryPathPointNear(float3 q, out float3 found)
             {
                 found = default;
-                var best = 1f;
+                var best = 2f;
                 var c = Cell1(q.xz);
                 for (var dx = -1; dx <= 1; dx++)
                     for (var dz = -1; dz <= 1; dz++)
@@ -2682,7 +2820,7 @@ namespace cs2_osm_importer
                                     found = cand;
                                 }
                             }
-                return best < 1f;
+                return best < 2f;
             }
             foreach (var w in ways)
                 if (IsPathLike(w))
