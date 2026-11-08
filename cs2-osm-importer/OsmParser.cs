@@ -2563,8 +2563,42 @@ namespace cs2_osm_importer
                 }
             }
 
+            // Road junction points as the roads will queue them, to join paths that land right beside one onto it.
+            var junctionRoadPoints = new Dictionary<(int, int), float3>();
+            foreach (var road in roads)
+                foreach (var rp in road.Points)
+                {
+                    var key = PointKey(rp.xz);
+                    if (junctionKeys.Contains(key) && !junctionRoadPoints.ContainsKey(key))
+                        junctionRoadPoints[key] = rp;
+                }
+            bool TryNearbyJunction(float3 at, out float3 junction)
+            {
+                junction = default;
+                var best = PathJoinToJunctionMeters;
+                var cx = (int)math.floor(at.x / 16f);
+                var cz = (int)math.floor(at.z / 16f);
+                for (var dx = -1; dx <= 1; dx++)
+                    for (var dz = -1; dz <= 1; dz++)
+                    {
+                        if (!junctionGrid.TryGetValue((cx + dx, cz + dz), out var cell))
+                            continue;
+                        foreach (var q in cell)
+                        {
+                            var d = math.distance(q, at.xz);
+                            if (d < best && d > 0.01f && junctionRoadPoints.TryGetValue(PointKey(q), out var rp))
+                            {
+                                best = d;
+                                junction = rp;
+                            }
+                        }
+                    }
+                return best < PathJoinToJunctionMeters;
+            }
+
             // Real paths that ended on a dropped detail: extend them onto the road.
             var snappedToCrossing = 0;
+            var joinedAtJunction = 0;
             var snappedToRoad = 0;
             var leftUnsnapped = 0;
             foreach (var path in ways)
@@ -2598,6 +2632,14 @@ namespace cs2_osm_importer
                         continue;
                     }
 
+                    // A path landing a few metres from a road junction joins at the junction itself. Its own junction
+                    // there sat inside the road junction's footprint (2.8 and 5.4 m from Volunteer Park's entrance),
+                    // and CS2 drew the path's paving across the lanes to the centre line.
+                    if (TryNearbyJunction(target, out var junctionPoint))
+                    {
+                        target = junctionPoint;
+                        joinedAtJunction++;
+                    }
                     if (math.distance(target.xz, endPoint.xz) < 0.01f)
                         continue;
                     if (end == 0)
@@ -2616,9 +2658,12 @@ namespace cs2_osm_importer
             Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
                          $"{crosswalksAdded} crosswalk upgrades added from crossing ways ({crosswalksUnmarked} unmarked skipped), {crosswalksDroppedNearJunction} dropped near junctions, " +
                          $"{crosswalksMerged} merged into a crosswalk within {CrosswalkMergeMeters:F0} m; " +
-                         $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
+                         $"paths extended onto roads: {snappedToCrossing} at crossings, {joinedAtJunction} moved onto a road junction within {PathJoinToJunctionMeters:F0} m, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
             return ways.Where(w => !detailSet.Contains(w)).ToList();
         }
+
+        // A path that would join a road this close to a road junction joins at the junction instead.
+        private const float PathJoinToJunctionMeters = 6f;
 
         // Crosswalks closer than this along one road (with no junction between them) become one.
         private const float CrosswalkMergeMeters = 20f;
@@ -3743,6 +3788,9 @@ namespace cs2_osm_importer
         private static void ClearJunctionApproaches(List<OsmWay> ways)
         {
             var useCount = new Dictionary<float3, int>();
+            // Points of roads (not paths). A path keeps its points next to a road: without its kerb point, a footpath joined
+            // to a road at its centre line ran its paving straight across the lanes (Volunteer Park ring, north side).
+            var roadPoints = new HashSet<float3>(ways.Where(w => !IsPathLike(w)).SelectMany(w => w.Points));
             var seen = new HashSet<float3>();
             var features = new HashSet<(int, int)>();
             (int, int) FeatureKey(float3 p) => ((int)math.round(p.x * 20f), (int)math.round(p.z * 20f));
@@ -3774,6 +3822,8 @@ namespace cs2_osm_importer
             foreach (var way in ways)
             {
                 var points = way.Points;
+                // A path keeps its points next to a road (see isPath below).
+                var isPath = IsPathLike(way);
                 if (points.Count < 3 || way.IsNodeRoundabout)
                     continue;
                 var heights = way.TerrainHeights.Count == points.Count ? way.TerrainHeights : null;
@@ -3784,6 +3834,8 @@ namespace cs2_osm_importer
                 {
                     isJunction[i] = useCount[points[i]] > 1;
                     fixedPoint[i] = i == 0 || i == n - 1 || isJunction[i] || NearFeature(points[i]);
+                    if (isPath && ((i > 0 && roadPoints.Contains(points[i - 1])) || (i < n - 1 && roadPoints.Contains(points[i + 1]))))
+                        fixedPoint[i] = true; // the kerb point of a path meeting a road
                 }
                 var drop = new bool[n];
 
@@ -3829,7 +3881,7 @@ namespace cs2_osm_importer
 
                 for (var j = 0; j < n; j++)
                 {
-                    if (!isJunction[j])
+                    if (!isJunction[j] || (isPath && roadPoints.Contains(points[j])))
                         continue;
                     if (j > 0) Clear(j, -1);
                     if (j < n - 1) Clear(j, 1);
