@@ -294,7 +294,8 @@ namespace cs2_osm_importer
                 Mod.log.Info($"Merged {mergedWayCount} connected OSM ways into simpler chains before import.");
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
             timer.Mark("sidewalksAndChains");
-            HarmonizeGroupElevations(finalWays);
+            // Grade-limited transitions over the whole network (replaces HarmonizeGroupElevations' 60 m ramps).
+            ApplyGradeLimitedElevations(finalWays);
             timer.Mark("harmonize");
             ConvertRoundabouts(finalWays, sampleHeight);
             timer.Mark("roundabouts");
