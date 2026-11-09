@@ -211,6 +211,8 @@ namespace cs2_osm_importer
         public string Ref { get; set; } = string.Empty;
         public string Highway { get; set; } = string.Empty;
         public string Footway { get; set; } = string.Empty;
+        // cycleway=* as tagged on the way itself ("crossing" on a bike crossing drawn across a road).
+        public string CyclewayTag { get; set; } = string.Empty;
         public string SidewalkTag { get; set; } = string.Empty;
         // A crossing way tagged crossing=unmarked/informal/no or crossing:markings=no.
         public bool IsUnmarkedCrossing { get; set; }

@@ -726,6 +726,8 @@ namespace cs2_osm_importer
                     var key = tag.GetAttribute("k");
                     var value = tag.GetAttribute("v");
 
+                    if (key == "cycleway")
+                        way.CyclewayTag = value;
                     if (key == "highway")
                         way.Highway = value;
                     else if (key == "name")
@@ -2039,6 +2041,7 @@ namespace cs2_osm_importer
                 Ref = way.Ref,
                 Highway = way.Highway,
                 Footway = way.Footway,
+                CyclewayTag = way.CyclewayTag,
                 SidewalkTag = way.SidewalkTag,
                 Lanes = way.Lanes,
                 LanesForward = way.LanesForward,
@@ -2107,6 +2110,7 @@ namespace cs2_osm_importer
                 Ref = ways[0].Ref,
                 Highway = ways[0].Highway,
                 Footway = ways[0].Footway,
+                CyclewayTag = ways[0].CyclewayTag,
                 SidewalkTag = ways[0].SidewalkTag,
                 Lanes = ways[0].Lanes,
                 LanesForward = ways[0].LanesForward,
@@ -2418,8 +2422,15 @@ namespace cs2_osm_importer
         // Crosswalk features this close to a road junction are dropped: the junction draws its own crosswalks.
         private const float JunctionCrosswalkRadiusMeters = 16f;
 
+        // A bike crossing drawn across a road (highway=cycleway + cycleway=crossing): handled like a footway crossing.
+        private static bool IsBikeCrossing(OsmWay way) =>
+            way != null && string.Equals(way.Highway, "cycleway", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(way.CyclewayTag, "crossing", StringComparison.OrdinalIgnoreCase);
+
         private static bool IsPedestrianDetailFootway(OsmWay way)
         {
+            if (IsBikeCrossing(way))
+                return true;
             if (way == null || !string.Equals(way.Highway, "footway", StringComparison.OrdinalIgnoreCase))
                 return false;
             switch ((way.Footway ?? string.Empty).Trim().ToLowerInvariant())
@@ -2466,6 +2477,8 @@ namespace cs2_osm_importer
             Func<long, bool> isUnmarkedCrossingNode = null)
         {
             var details = ways.Where(IsPedestrianDetailFootway).ToList();
+            // Bike tracks mapped beside a road: the road gets bike lanes and the track goes, like a mapped sidewalk.
+            details.AddRange(FindSidepathCycleways(ways));
             if (details.Count == 0)
                 return ways;
             var detailSet = new HashSet<OsmWay>(details);
@@ -2499,7 +2512,7 @@ namespace cs2_osm_importer
             var kerbToRoadPoint = new Dictionary<long, float3>();
             var crosswalksAdded = 0;
             var crosswalksUnmarked = 0;
-            foreach (var crossing in details.Where(d => string.Equals(d.Footway, "crossing", StringComparison.OrdinalIgnoreCase)))
+            foreach (var crossing in details.Where(d => string.Equals(d.Footway, "crossing", StringComparison.OrdinalIgnoreCase) || IsBikeCrossing(d)))
             {
                 foreach (var id in crossing.NodeIds)
                 {
