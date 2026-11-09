@@ -110,7 +110,7 @@ namespace cs2_osm_importer
             }
         }
 
-        private static void ApplyGradeLimitedElevations(List<OsmWay> ways)
+        private static void ApplyGradeLimitedElevations(List<OsmWay> ways, List<OsmTrench> trenches = null)
         {
             var graph = new GradeGraph();
             var levelCrossings = FindLevelCrossings(ways);
@@ -182,7 +182,7 @@ namespace cs2_osm_importer
                     o = math.max(o, lo[i]);
                 offset[i] = o;
             }
-            ResolveLevelCrossings(graph, n, wayNodes, offset, levelCrossings);
+            ResolveLevelCrossings(graph, n, wayNodes, offset, levelCrossings, trenches);
 
             var maxSlopeBefore = 0f;
             var maxSlopeAfter = 0f;
@@ -213,6 +213,12 @@ namespace cs2_osm_importer
         }
 
         private const int LevelCrossingPasses = 4;
+        // A trench under a bridge reaches this far beyond the deck's edges along the way below.
+        private const float TrenchMarginMeters = 6f;
+        // ... and this far beyond the way's edges across it: room for the bridge's pillars, which stand beside the way
+        // below (MovePillarPointsOffWaysBelow), on lowered ground too (a pillar node at the trench's edge stood 5.8 m
+        // above the ground on one side and the span over it got walls again).
+        private const float TrenchSideRoomMeters = 12f;
 
         /// <summary>
         /// Structure planning asks each bridge for clearance over what it crosses, but the grade limits then decide:
@@ -225,7 +231,7 @@ namespace cs2_osm_importer
         /// above it in turn. What still lacks room (a crossing right at a junction) is counted and left.
         /// </summary>
         private static void ResolveLevelCrossings(GradeGraph graph, int n, List<(OsmWay Way, int[] Nodes)> wayNodes, float[] offset,
-            List<LevelCrossing> crossings)
+            List<LevelCrossing> crossings, List<OsmTrench> trenches = null)
         {
             if (crossings.Count == 0 || n == 0)
                 return;
@@ -316,6 +322,29 @@ namespace cs2_osm_importer
                 if (it.C.Clearance - Gap(it, final) > 0.05f)
                     shortAfter++;
             }
+            // Where the way below dipped, the heightmap had filled the trench up to near the deck (bare-earth maps
+            // interpolate under removed bridges): generation lowers the ground there to the way's height, so the deck
+            // stands on pillars over a cut instead of on walls over a bank.
+            var trenchCount = 0;
+            foreach (var it in items)
+            {
+                if (trenches == null || it.Partner < 0 || final[it.Partner] > offset[it.Partner] - 0.5f)
+                    continue;
+                if (!TryProjectOnWay(it.C.Other.Points, it.C.At, out var seg, out _))
+                    continue;
+                var dir = math.normalizesafe(it.C.Other.Points[seg].xz - it.C.Other.Points[seg - 1].xz);
+                trenches.Add(new OsmTrench
+                {
+                    Center = it.C.At,
+                    Direction = dir,
+                    HalfLength = HalfWidth(it.C.Mover) + TrenchMarginMeters,
+                    HalfWidth = HalfWidth(it.C.Other) + TrenchSideRoomMeters,
+                    Floor = graph.Reference[it.Partner] + final[it.Partner]
+                });
+                trenchCount++;
+            }
+            if (trenchCount > 0)
+                Mod.log.Info($"Level crossings: {trenchCount} trenches recorded under bridges where the way below dips (ground lowered at generation).");
             Array.Copy(final, offset, n);
             Mod.log.Info($"Level crossings: {items.Count} bridges/tunnels crossing a way at another OSM level, {shortBefore} short of clearance " +
                          $"({LevelClearanceOverRoadMeters} m over roads/rail, {LevelClearanceOverPathMeters} m over paths) after grading; " +

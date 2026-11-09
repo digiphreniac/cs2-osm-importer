@@ -295,7 +295,7 @@ namespace cs2_osm_importer
             var finalWays = mergedWayCount > 0 ? mergedWays : parsedWays;
             timer.Mark("sidewalksAndChains");
             // Grade-limited transitions over the whole network (replaces HarmonizeGroupElevations' 60 m ramps).
-            ApplyGradeLimitedElevations(finalWays);
+            ApplyGradeLimitedElevations(finalWays, document.Trenches);
             timer.Mark("harmonize");
             ConvertRoundabouts(finalWays, sampleHeight);
             timer.Mark("roundabouts");
@@ -319,6 +319,7 @@ namespace cs2_osm_importer
                 SimplifyRoadPoints(finalWays, options.SimplifyPlanToleranceMeters, options.SimplifyHeightToleranceMeters);
             ClearJunctionApproaches(finalWays);
             JoinSameLevelCrossings(finalWays);
+            MovePillarPointsOffWaysBelow(finalWays);
             timer.Mark("simplify");
             document.Ways.AddRange(finalWays);
 

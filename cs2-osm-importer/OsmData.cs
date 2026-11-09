@@ -131,6 +131,10 @@ namespace cs2_osm_importer
 
         // Lakes, ponds and reservoirs (natural=water that is not a river, stream or canal).
         public List<OsmLake> Lakes { get; } = new List<OsmLake>();
+
+        // Where a bridge crosses a way that dips under it: generation lowers the ground there to that way's height,
+        // the trench the heightmap has filled in (see OsmImportSystem.Trenches).
+        public List<OsmTrench> Trenches { get; } = new List<OsmTrench>();
     }
 
     internal sealed class OsmLake
@@ -202,6 +206,18 @@ namespace cs2_osm_importer
 
         // Outline in world XZ (metres, scale applied), counter-clockwise, without a repeated closing point.
         public List<float2> Ring { get; } = new List<float2>();
+    }
+
+    internal sealed class OsmTrench
+    {
+        public float2 Center;
+        // Unit direction of the way below; the trench runs along it.
+        public float2 Direction;
+        // Half the trench's length along the way below (the bridge's half width plus a margin) and half its width.
+        public float HalfLength;
+        public float HalfWidth;
+        // Ground height at the bottom: the way below's height there.
+        public float Floor;
     }
 
     internal sealed class OsmWay

@@ -48,7 +48,8 @@ namespace cs2_osm_importer
             WaitForGameApply,
             RemoveIntersectingPillars,
             DeleteRoads,
-            WaitForSeaLevel
+            WaitForSeaLevel,
+            WaitForTrenches
         }
 
         private enum ApplyWaitPurpose
@@ -396,6 +397,9 @@ namespace cs2_osm_importer
                 case WorkPhase.WaitForSeaLevel:
                     ProcessSeaWait();
                     break;
+                case WorkPhase.WaitForTrenches:
+                    ProcessTrenchWait();
+                    break;
                 case WorkPhase.QueueRoundaboutConnectors:
                     ProcessRoundaboutConnectorBatch();
                     break;
@@ -646,9 +650,18 @@ namespace cs2_osm_importer
                     ? $"Generating... (0%)"
                     : L("OsmImporter.Status.GeneratingRoads", "generating...");
                 Mod.log.Info($"Baseline edge count before OSM road generation: {_baselineEdgeCount}");
-                _phase = SeaWaitOr(_roundaboutConnectorWays.Count > 0
+                var firstPhase = _roundaboutConnectorWays.Count > 0
                     ? WorkPhase.QueueRoundaboutConnectors
-                    : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply));
+                    : (_generationTypeOrder.Count > 0 ? WorkPhase.QueueDefinitions : WorkPhase.WaitForGameApply);
+                // Ground under bridges lowered first; the roads are queued once the game has the new heights.
+                if (CarveTrenches())
+                {
+                    _phaseAfterTrenches = firstPhase;
+                    _trenchWaitFrames = 0;
+                    _phase = WorkPhase.WaitForTrenches;
+                }
+                else
+                    _phase = SeaWaitOr(firstPhase);
                 SetStatus(L("OsmImporter.Status.GenerationSelected", "Generating selected OSM roads..."));
                 _loggedFirstQueuedSegment = false;
             }

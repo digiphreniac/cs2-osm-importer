@@ -58,6 +58,12 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   crossing on both of them, neither can move far enough, and the deck clips the way below (about 240 of 2100 such
   crossings on full Seattle, mostly short footbridges in dense spots). A path that joins a bridge in the middle of
   its span is sometimes left unconnected there.
+- **Generate lowers the ground under some bridges.** Heightmaps made from bare-earth elevation data fill in the ground
+  under a bridge (the I-5 trench under Yesler Way is a bank in the Seattle heightmap), so a road passing under a bridge
+  dips into a cut and the bridge would stand on walls instead of pillars. Where that happens, Generate lowers the map's
+  heightmap in a trench under the bridge to the height of the way below (476 places on full Seattle). The lowered
+  ground stays when the roads are deleted. Bridge points that would put a pillar in a road below are moved along the
+  bridge to a clear spot when one is within 15 m; where none is, the pillar can still stand in the road.
 - **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
   constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
   lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is

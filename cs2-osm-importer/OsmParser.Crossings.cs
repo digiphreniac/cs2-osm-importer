@@ -252,8 +252,10 @@ namespace cs2_osm_importer
         private static bool IsTunnelStructure(OsmWay w) => w.UsesStructuralElevation && w.IsTunnel;
 
         // Height between centre lines where a way passes over another: a road or track below needs room for trucks
-        // and trains plus the deck; a path below needs less.
-        private const float LevelClearanceOverRoadMeters = 6.5f;
+        // and trains plus the deck; a path below needs less. Over a road it is also what CS2 needs to build the deck on
+        // pillars: a piece of road gets pillars only where it stands at least twice its prefab's elevation step (4 m
+        // for a Small Road) above the ground, and at 6.5 m Yesler Way over the I-5 ramps came out as a walled ramp.
+        private const float LevelClearanceOverRoadMeters = 8.5f;
         private const float LevelClearanceOverPathMeters = 4.5f;
         // Crossings of the same two ways closer than this are one crossing (a curve drawn twice through the grid).
         private const float LevelCrossingMergeMeters = 1f;
