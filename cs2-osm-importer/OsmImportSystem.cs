@@ -2693,15 +2693,23 @@ namespace cs2_osm_importer
             var pathJoinCrossingsKept = 0;
             var besideJunction = 0;
 
-            // Minor: a path joining a road; an alley, driveway, track or a road without sidewalks meeting anything;
-            // or only minor roads meeting (unclassified alone is not enough: plenty of ordinary Seattle streets are
-            // unclassified, and those intersections lost their crosswalks).
+            // A side leg: an alley, driveway, service road or track, or a road without sidewalks. Its own crosswalk
+            // is what carries the street's sidewalk across its mouth: without it every alley mouth cut the sidewalk,
+            // and pedestrians on Capitol Hill could not leave their block (a walk from East John Street and 16th
+            // Avenue East reached 104 lanes; random walks found a route 0-5 times in 100). It is never removed.
+            bool IsSideLeg(JunctionLeg l) => !l.IsPath && (l.NoSidewalk || IsSideRoad(l.Way.Highway));
+            // Minor: a path joining a road, or side legs joining one street that runs straight through (an alley
+            // mouth or driveway mid-block, which drew two crosswalks over the street). A corner of two streets is
+            // never minor, whatever else joins it: there pedestrians cross both.
             bool IsMinor(List<JunctionLeg> legs)
             {
                 var roads = legs.Where(l => !l.IsPath).ToList();
-                return roads.Count <= 2 ||
-                       roads.Any(l => l.NoSidewalk || IsSideRoad(l.Way.Highway)) ||
-                       roads.All(l => IsMinorJunctionRoad(l.Way.Highway));
+                if (roads.Count <= 2)
+                    return true;
+                var main = roads.Where(l => !IsSideLeg(l)).ToList();
+                if (main.Count == roads.Count)
+                    return false;
+                return main.Count <= 1 || (main.Count == 2 && math.dot(main[0].Direction, main[1].Direction) < -0.7f);
             }
             // Ordinary junctions keep every crosswalk CS2 draws; a path joining the road right beside one needs none
             // of its own (checked with node_lanes: without it the trail's bike lanes across the road stay, and
@@ -2770,7 +2778,7 @@ namespace cs2_osm_importer
                 }
                 foreach (var leg in roadLegs)
                 {
-                    if (keepHere.Contains((leg.Edge, leg.AtStart)))
+                    if (keepHere.Contains((leg.Edge, leg.AtStart)) || (!pathJoin && IsSideLeg(leg)))
                         continue;
                     var flags = default(CompositionFlags);
                     if (leg.AtStart)
