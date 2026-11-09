@@ -510,6 +510,16 @@ namespace cs2_osm_importer
                     SampleTerrainHeight,
                     terrainOffset);
                 Mod.log.Info($"Parsed {_document.NodeCount} OSM nodes and {_document.Ways.Count} supported highway ways");
+                if (_despikedSamples > 0)
+                {
+                    // Spike locations, grouped on a 100 m grid: where, how many samples, how high above the ground around.
+                    var spots = _despikeSamples.GroupBy(s => ((int)math.floor(s.x / 100f), (int)math.floor(s.z / 100f)))
+                        .Select(g => $"({g.Average(s => s.x):F0}, {g.Average(s => s.z):F0}) x{g.Count()} up to {g.Max(s => s.y):F0} m")
+                        .ToList();
+                    Mod.log.Info($"Ground heights: {_despikedSamples} samples on narrow heightmap spikes (towers in a surface model) used the ground around them instead, at {spots.Count} spots: {string.Join("; ", spots.Take(40))}.");
+                }
+                _despikedSamples = 0;
+                _despikeSamples.Clear();
                 if (_document.InferredLaneCount > 0)
                     Mod.log.Info($"Normalized {_document.InferredLaneCount} contiguous ways to inherit lane counts from connected segments.");
                 LogOsmRoadFeatureSummary(_document);
@@ -5462,13 +5472,63 @@ namespace cs2_osm_importer
                     LogTerrainMethods("TerrainSystem.GetHeightData(false)", _terrainHeightData);
                 }
 
-                return TerrainUtils.SampleHeight(ref _terrainHeightData, position);
+                var height = TerrainUtils.SampleHeight(ref _terrainHeightData, position);
+                return DespikedHeight(position, height);
             }
 
             if (TrySampleUnityTerrainHeight(position, out var unityHeight))
                 return unityHeight;
 
             return 0f;
+        }
+
+        // Ground heights ignore narrow spikes: some heightmaps are surface models that include towers (Queen Anne's TV
+        // towers in the Seattle heightmap: about 15 m wide, up to 444 m on ground at 80 m, with flanks: about 32 m wide in all), and roads
+        // crossing one were lifted onto it. A point more than SpikeThresholdMeters above the median of a 7 x 7 grid
+        // SpikeGridMeters apart around it takes the median, if the cells that high are few (a narrow feature). The top of a
+        // real bluff or slope has about half the grid that high, so it never counts.
+        private const float SpikeThresholdMeters = 5f;
+        private const float SpikeGridMeters = 12f;
+        private const int SpikeMaxHighCells = 15;
+        private int _despikedSamples;
+        private readonly float[] _spikeGrid = new float[49];
+        private readonly float[] _spikeSorted = new float[49];
+
+        private readonly List<float3> _despikeSamples = new List<float3>();
+
+        private float DespikedHeight(float3 position, float height)
+        {
+            // Cheap pre-check: only a point above all four points 2 cells away can be on a spike (on a slope the uphill
+            // one is higher; most samples stop here).
+            var ring = float.MinValue;
+            var r = 2f * SpikeGridMeters;
+            ring = math.max(ring, TerrainUtils.SampleHeight(ref _terrainHeightData, position + new float3(r, 0f, 0f)));
+            ring = math.max(ring, TerrainUtils.SampleHeight(ref _terrainHeightData, position + new float3(-r, 0f, 0f)));
+            ring = math.max(ring, TerrainUtils.SampleHeight(ref _terrainHeightData, position + new float3(0f, 0f, r)));
+            ring = math.max(ring, TerrainUtils.SampleHeight(ref _terrainHeightData, position + new float3(0f, 0f, -r)));
+            if (height - ring <= SpikeThresholdMeters)
+                return height;
+            var k = 0;
+            for (var dx = -3; dx <= 3; dx++)
+                for (var dz = -3; dz <= 3; dz++)
+                    _spikeGrid[k++] = dx == 0 && dz == 0
+                        ? height
+                        : TerrainUtils.SampleHeight(ref _terrainHeightData, position + new float3(dx * SpikeGridMeters, 0f, dz * SpikeGridMeters));
+            Array.Copy(_spikeGrid, _spikeSorted, 49);
+            Array.Sort(_spikeSorted);
+            var median = _spikeSorted[24];
+            if (height - median <= SpikeThresholdMeters)
+                return height;
+            var high = 0;
+            for (var i = 0; i < 49; i++)
+                if (_spikeGrid[i] - median > SpikeThresholdMeters)
+                    high++;
+            if (high > SpikeMaxHighCells)
+                return height;
+            _despikedSamples++;
+            if (_despikeSamples.Count < 400)
+                _despikeSamples.Add(new float3(position.x, height - median, position.z));
+            return median;
         }
 
         private void CacheTerrainHeightData()
