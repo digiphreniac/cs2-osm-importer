@@ -235,6 +235,10 @@ namespace cs2_osm_importer
         // man_made=pier: a flat deck over the water; its height is set from the water level at generation.
         public bool IsPier { get; set; }
         public bool IsTunnel { get; set; }
+        // OSM layer=* (0 when untagged): which ways may cross without meeting.
+        public int Layer { get; set; }
+        // indoor=* (not "no"): a corridor inside a building, not built as a way crossing anything outdoors.
+        public bool IsIndoor { get; set; }
         public bool IsOneWay { get; set; }
         public int OneWayDirection { get; set; }
         public float BaseElevationOffsetMeters { get; set; }

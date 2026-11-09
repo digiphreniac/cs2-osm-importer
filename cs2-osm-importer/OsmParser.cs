@@ -318,6 +318,7 @@ namespace cs2_osm_importer
             if (sampleHeight != null)
                 SimplifyRoadPoints(finalWays, options.SimplifyPlanToleranceMeters, options.SimplifyHeightToleranceMeters);
             ClearJunctionApproaches(finalWays);
+            JoinSameLevelCrossings(finalWays);
             timer.Mark("simplify");
             document.Ways.AddRange(finalWays);
 
@@ -770,6 +771,8 @@ namespace cs2_osm_importer
                         else if (IsTruthy(value) || normalized == "yes" || normalized == "true" || normalized == "1" || normalized == "forward" || normalized == "fwd")
                             oneWayDirection = 1;
                     }
+                    else if (key == "indoor")
+                        way.IsIndoor = !string.Equals(value, "no", StringComparison.OrdinalIgnoreCase);
                     else if (key == "covered")
                         isCovered = IsTruthy(value);
                     else if (key == "embankment")
@@ -878,6 +881,7 @@ namespace cs2_osm_importer
             }
             way.IsBridge = isBridge;
             way.IsTunnel = isTunnel;
+            way.Layer = hasLayer ? layer : 0;
             // Only junction=roundabout/circular. A closed loop street (around a block, a cul-de-sac loop) is an ordinary road.
             way.IsRoundabout = isRoundabout;
             way.OneWayDirection = oneWayDirection;
@@ -2045,6 +2049,8 @@ namespace cs2_osm_importer
                 IsBridge = way.IsBridge,
                 IsPier = way.IsPier,
                 IsTunnel = way.IsTunnel,
+                Layer = way.Layer,
+                IsIndoor = way.IsIndoor,
                 IsOneWay = way.IsOneWay,
                 OneWayDirection = way.OneWayDirection,
                 BaseElevationOffsetMeters = way.BaseElevationOffsetMeters,
@@ -2111,6 +2117,8 @@ namespace cs2_osm_importer
                 IsBridge = ways[0].IsBridge,
                 IsPier = ways[0].IsPier,
                 IsTunnel = ways[0].IsTunnel,
+                Layer = ways[0].Layer,
+                IsIndoor = ways[0].IsIndoor,
                 IsOneWay = ways[0].IsOneWay,
                 OneWayDirection = ways[0].OneWayDirection,
                 BaseElevationOffsetMeters = ways[0].BaseElevationOffsetMeters,
@@ -2570,6 +2578,9 @@ namespace cs2_osm_importer
             var snappedToCrossing = 0;
             var snappedToRoad = 0;
             var leftUnsnapped = 0;
+            var crossingsJoined = 0;
+            var leftThroughOther = 0;
+            var crossIndex = new WayCrossingIndex(ways.Where(w => !detailSet.Contains(w)));
             foreach (var path in ways)
             {
                 if (detailSet.Contains(path) || roadSet.Contains(path) || path.IsRoundabout || path.NodeIds.Count < 2 || path.Points.Count < 2)
@@ -2603,23 +2614,57 @@ namespace cs2_osm_importer
 
                     if (math.distance(target.xz, endPoint.xz) < 0.01f)
                         continue;
-                    if (end == 0)
+                    // The extension meets every way it crosses on the way to the road (a pier walkway extended across
+                    // the Westlake bike lane to a service road ran through it with no junction).
+                    // One it crosses at another height (a pier deck below the shore path) cannot be joined: the
+                    // extension stops at the last way it could join, or the end stays unconnected.
+                    var added = new List<float3>();
+                    var from = endPoint;
+                    var throughOther = false;
+                    while (added.Count < 4 && crossIndex.TryFirstCrossing(from, target, path, out var crossed, out var at, out var gap))
                     {
-                        path.Points.Insert(0, target);
-                        if (path.TerrainHeights.Count > 0) path.TerrainHeights.Insert(0, target.y);
+                        if (gap > CrossingJoinHeightMeters)
+                        {
+                            throughOther = true;
+                            break;
+                        }
+                        from = InsertPointOnWay(crossed, at, CrossingJoinReuseMeters);
+                        crossIndex.Update(crossed);
+                        added.Add(from);
+                        crossingsJoined++;
                     }
-                    else
+                    if (throughOther)
                     {
-                        path.Points.Add(target);
-                        if (path.TerrainHeights.Count > 0) path.TerrainHeights.Add(target.y);
+                        if (added.Count == 0)
+                        {
+                            leftThroughOther++;
+                            continue;
+                        }
+                        target = added[added.Count - 1];
+                        added.RemoveAt(added.Count - 1);
                     }
+                    added.Add(target);
+                    foreach (var q in added)
+                    {
+                        if (end == 0)
+                        {
+                            path.Points.Insert(0, q);
+                            if (path.TerrainHeights.Count > 0) path.TerrainHeights.Insert(0, q.y);
+                        }
+                        else
+                        {
+                            path.Points.Add(q);
+                            if (path.TerrainHeights.Count > 0) path.TerrainHeights.Add(q.y);
+                        }
+                    }
+                    crossIndex.Update(path);
                 }
             }
 
             Mod.log.Info($"Pedestrian details: dropped {details.Count} sidewalk/crossing/island/link footways (CS2 roads draw their own); " +
                          $"{crosswalksAdded} crosswalk upgrades added from crossing ways ({crosswalksUnmarked} unmarked skipped), {crosswalksDroppedNearJunction} dropped near junctions, " +
                          $"{crosswalksMerged} merged into a crosswalk within {CrosswalkMergeMeters:F0} m; " +
-                         $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected.");
+                         $"paths extended onto roads: {snappedToCrossing} at crossings, {snappedToRoad} at the nearest road point, {leftUnsnapped} left unconnected; {crossingsJoined} ways crossed on the way joined there, {leftThroughOther} left unconnected (the way crossed was at another height).");
             return ways.Where(w => !detailSet.Contains(w)).ToList();
         }
 
@@ -2675,6 +2720,8 @@ namespace cs2_osm_importer
             var moved = 0;
             var merged = 0;
             var featuresMoved = 0;
+            var blocked = 0;
+            var crossIndex = new WayCrossingIndex(ways);
             foreach (var road in roads)
             {
                 var pts = road.Points;
@@ -2732,27 +2779,63 @@ namespace cs2_osm_importer
                     while (seg < pts.Count - 1 && along[seg] < s)
                         seg++;
                     float3 target;
+                    var insertAt = -1;
+                    var insertT = 0f;
                     if (math.abs(along[seg] - s) < 0.5f && seg < pts.Count - 1 && !IsRoadJunction(PointKey(pts[seg].xz)))
                         target = pts[seg];
                     else if (math.abs(along[seg - 1] - s) < 0.5f && seg - 1 > 0 && !IsRoadJunction(PointKey(pts[seg - 1].xz)))
                         target = pts[seg - 1];
                     else
                     {
-                        var t = (s - along[seg - 1]) / math.max(0.01f, along[seg] - along[seg - 1]);
-                        target = math.lerp(pts[seg - 1], pts[seg], t);
-                        if (road.TerrainHeights.Count == pts.Count)
-                            road.TerrainHeights.Insert(seg, math.lerp(road.TerrainHeights[seg - 1], road.TerrainHeights[seg], t));
-                        pts.Insert(seg, target);
+                        insertT = (s - along[seg - 1]) / math.max(0.01f, along[seg] - along[seg - 1]);
+                        target = math.lerp(pts[seg - 1], pts[seg], insertT);
+                        insertAt = seg;
                     }
-                    foreach (var j in g)
-                        foreach (var (path, end) in endsAt[j.Key])
+
+                    // Move every path end of the group, then check each moved path's new last piece: if one now
+                    // crosses another way (a join slid along the road past a neighbouring path), the group stays put.
+                    var ends = g.SelectMany(j => endsAt[j.Key]).ToList();
+                    var old = ends.Select(e => e.Path.Points[e.End == 0 ? 0 : e.Path.Points.Count - 1]).ToList();
+                    void SetEnds(Func<int, float3> point)
+                    {
+                        for (var k = 0; k < ends.Count; k++)
                         {
+                            var (path, end) = ends[k];
                             var idx = end == 0 ? 0 : path.Points.Count - 1;
-                            path.Points[idx] = target;
+                            path.Points[idx] = point(k);
                             if (path.TerrainHeights.Count == path.Points.Count)
-                                path.TerrainHeights[idx] = target.y;
-                            moved++;
+                                path.TerrainHeights[idx] = path.Points[idx].y;
                         }
+                        foreach (var path in ends.Select(e => e.Path).Distinct())
+                            crossIndex.Update(path);
+                    }
+                    // The road gets its point first, so the paths arriving there count as meeting it.
+                    var roadHeights = road.TerrainHeights.Count == pts.Count;
+                    if (insertAt >= 0)
+                    {
+                        if (roadHeights)
+                            road.TerrainHeights.Insert(insertAt, math.lerp(road.TerrainHeights[insertAt - 1], road.TerrainHeights[insertAt], insertT));
+                        pts.Insert(insertAt, target);
+                    }
+                    SetEnds(_ => target);
+                    var crosses = ends.Any(e =>
+                    {
+                        var n = e.Path.Points.Count;
+                        return n >= 2 && crossIndex.TryFirstCrossing(e.Path.Points[e.End == 0 ? 1 : n - 2], target, e.Path, out _, out _);
+                    });
+                    if (crosses)
+                    {
+                        SetEnds(k => old[k]);
+                        if (insertAt >= 0)
+                        {
+                            pts.RemoveAt(insertAt);
+                            if (roadHeights)
+                                road.TerrainHeights.RemoveAt(insertAt);
+                        }
+                        blocked++;
+                        continue;
+                    }
+                    moved += ends.Count;
                     // The crossing, stop sign or signal mapped where a path met the road belongs to that crossing:
                     // it moves with the join. Left behind, a stop sign 10.9 m from the ring's north junction drew two
                     // stop lines across the road where no path crossed any more. A mapped crossing dropped as being
@@ -2786,7 +2869,7 @@ namespace cs2_osm_importer
                 }
             }
             Mod.log.Info($"Path joins: {moved} path ends moved, {merged} joins merged into a neighbour within {PathJoinMergeMeters:F0} m, {featuresMoved} crossings/stop signs/signals moved with them; " +
-                         $"joins kept {PathJoinJunctionClearanceMeters:F0} m from road junctions.");
+                         $"joins kept {PathJoinJunctionClearanceMeters:F0} m from road junctions; {blocked} left in place (moving them crossed another way).");
         }
 
         // A path joining a road ends with a straight piece this long, square to the road.
@@ -2860,6 +2943,9 @@ namespace cs2_osm_importer
             var squared = 0;
             var snappedToPathPoint = 0;
             var skippedShort = 0;
+            var skippedCrossing = 0;
+            var straightened = 0;
+            var crossIndex = new WayCrossingIndex(ways);
             foreach (var path in ways)
             {
                 if (!IsPathLike(path) || path.Points.Count < 2)
@@ -2913,16 +2999,39 @@ namespace cs2_osm_importer
                     var outPoint = new float3(outXz.x, math.lerp(endPoint.y, pts[firstKept].y, t), outXz.y);
                     var heights = path.TerrainHeights.Count == n ? path.TerrainHeights : null;
                     var outHeight = heights != null ? math.lerp(heights[endIndex], heights[firstKept], t) : outPoint.y;
-                    if (TryPathPointNear(outPoint, out var existing))
+                    var snapped = TryPathPointNear(outPoint, out var existing);
+                    if (snapped)
                     {
                         outPoint = existing;
                         outHeight = existing.y;
-                        snappedToPathPoint++;
                     }
-                    else
+                    // The square piece cuts a corner of the path: through a neighbouring path or the road beside it,
+                    // the two would cross with no junction. Such an end stays as mapped, unless its last piece is
+                    // too short for CS2 (the Pike Street Hillclimb's 1.8 m piece onto Alaskan Way, square blocked by
+                    // the waterfront bike path, was left unbuilt): then it runs straight from the road to the first
+                    // kept point, if that crosses nothing and stays within PathStraightenMeters of the mapped line.
+                    if (crossIndex.TryFirstCrossing(endPoint, outPoint, path, out _, out _) ||
+                        crossIndex.TryFirstCrossing(outPoint, pts[firstKept], path, out _, out _))
                     {
-                        AddPathPoint(outPoint);
+                        var between = math.abs(firstKept - endIndex) - 1;
+                        if (between > 0 && math.distance(pts[endIndex + step].xz, endPoint.xz) < MinPathApproachMeters &&
+                            MaxOffChord(pts, endIndex, firstKept) <= PathStraightenMeters &&
+                            !crossIndex.TryFirstCrossing(endPoint, pts[firstKept], path, out _, out _))
+                        {
+                            var from = math.min(endIndex, firstKept) + 1;
+                            pts.RemoveRange(from, between);
+                            heights?.RemoveRange(from, between);
+                            crossIndex.Update(path);
+                            straightened++;
+                        }
+                        else
+                            skippedCrossing++;
+                        continue;
                     }
+                    if (snapped)
+                        snappedToPathPoint++;
+                    else
+                        AddPathPoint(outPoint);
 
                     // Drop the points between the road and firstKept, then put the square point there.
                     var lo = math.min(endIndex, firstKept);
@@ -2936,11 +3045,31 @@ namespace cs2_osm_importer
                     }
                     pts.Insert(removeFrom, outPoint);
                     heights?.Insert(removeFrom, outHeight);
+                    crossIndex.Update(path);
                     squared++;
                 }
             }
             Mod.log.Info($"Path approaches: {squared} path ends on a road given a {PathApproachMeters:F0} m piece square to the road ({snappedToPathPoint} sharing another path's point) " +
-                         $"({skippedShort} left as they were: too short or another way within {MinPathApproachMeters:F0} m).");
+                         $"({skippedShort} left as they were: too short or another way within {MinPathApproachMeters:F0} m; {skippedCrossing} because the square piece crossed another way; " +
+                         $"{straightened} of those with a too short last piece run straight from the road instead).");
+        }
+
+        // A blocked square approach may instead run straight from the road when the mapped points stay this close.
+        private const float PathStraightenMeters = 2f;
+
+        private static float MaxOffChord(List<float3> pts, int a, int b)
+        {
+            var lo = math.min(a, b);
+            var hi = math.max(a, b);
+            var chord = pts[hi].xz - pts[lo].xz;
+            var len2 = math.max(1e-6f, math.lengthsq(chord));
+            var max = 0f;
+            for (var i = lo + 1; i < hi; i++)
+            {
+                var t = math.saturate(math.dot(pts[i].xz - pts[lo].xz, chord) / len2);
+                max = math.max(max, math.distance(pts[i].xz, pts[lo].xz + chord * t));
+            }
+            return max;
         }
 
         // Crosswalks closer than this along one road (with no junction between them) become one.
