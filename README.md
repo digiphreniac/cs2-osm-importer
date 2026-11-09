@@ -64,6 +64,9 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   heightmap in a trench under the bridge to the height of the way below (476 places on full Seattle). The lowered
   ground stays when the roads are deleted. Bridge points that would put a pillar in a road below are moved along the
   bridge to a clear spot when one is within 15 m; where none is, the pillar can still stand in the road.
+- **Some marina docks are not connected to the shore.** Piers mapped as areas become walkways, and a free end joins
+  the nearest path within 4 m; docks whose gangway to land is not mapped stay walkways of their own that citizens
+  cannot reach (most of the failed walks in the Lake Union and Ship Canal test areas).
 - **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
   constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
   lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is
