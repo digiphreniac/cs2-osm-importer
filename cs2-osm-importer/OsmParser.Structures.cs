@@ -216,9 +216,12 @@ namespace cs2_osm_importer
                                     continue;
                                 var other = o.UsesStructuralElevation && (o.IsBridge || o.IsTunnel) ? o.BaseElevationOffsetMeters : 0f;
                                 var y = HeightOf(o, seg, at);
-                                if (isBridge && other < level)
+                                // A structure on the same layer that is already planned (interchange ramps often share
+                                // layer=1 where they cross): this one goes over (bridge) or under (tunnel) it.
+                                var samePlanned = math.abs(other - level) < 0.01f && planned.ContainsKey(o) && o.IsBridge == isBridge;
+                                if (isBridge && (other < level || samePlanned))
                                     need = math.max(need, y + StructureClearanceMeters - refHere);
-                                else if (!isBridge && other > level)
+                                else if (!isBridge && (other > level || samePlanned))
                                     need = math.min(need, y - StructureClearanceMeters - refHere);
                             }
                         }

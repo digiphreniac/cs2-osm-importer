@@ -3030,6 +3030,8 @@ namespace cs2_osm_importer
         /// reused; otherwise the projected point is inserted into that road so CS2 has a node to join the path to.
         /// </summary>
         /// <param name="roadIndex">Spatial prefilter over <paramref name="roads"/>: only roads near p are scanned, in list order.</param>
+        private const float PathSnapMaxHeightMeters = 3f;
+
         private static bool TrySnapToRoad(float3 p, List<OsmWay> roads, PolylineIndex roadIndex, out float3 target)
         {
             target = default;
@@ -3052,6 +3054,11 @@ namespace cs2_osm_importer
                     var len2 = math.lengthsq(ab);
                     var t = len2 > 1e-6f ? math.saturate(math.dot(p.xz - a, ab) / len2) : 0f;
                     var d = math.distance(p.xz, a + ab * t);
+                    // Only a road at the path's own level: from above, a bridge deck 30 m up or a tunnel below is as
+                    // near as the street, and paths ending beside one were pulled up onto it (vertical paths at I-5's
+                    // convention center and the West Seattle Bridge).
+                    if (math.abs(math.lerp(pts[i - 1].y, pts[i].y, t) - p.y) > PathSnapMaxHeightMeters)
+                        continue;
                     if (d < bestDistance)
                     {
                         bestDistance = d;
