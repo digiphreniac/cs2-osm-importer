@@ -34,10 +34,36 @@ namespace cs2_osm_importer
             }
         }
 
+        /// <summary>
+        /// The steeper grade allowed where a bridge must clear what it crosses (or a tunnel pass under it) and the
+        /// normal grade leaves it too low: real interchange ramps and footbridge approaches are steeper than the
+        /// gentle rise a long viaduct gets.
+        /// </summary>
+        private static float MaxClearanceGrade(OsmWay way)
+        {
+            switch ((way.Highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "motorway": case "motorway_link": case "trunk": case "trunk_link":
+                case "primary": case "primary_link":
+                    return 0.08f;
+                case "secondary": case "secondary_link": case "tertiary": case "tertiary_link":
+                    return 0.10f;
+                case "steps":
+                    return 0.5f;
+                case "footway": case "path": case "pedestrian": case "cycleway": case "bridleway":
+                    return 0.15f;
+                case "rail": case "light_rail": case "subway": case "tram": case "monorail": case "narrow_gauge":
+                case "funicular": case "preserved":
+                    return 0.04f;
+                default:
+                    return 0.12f;
+            }
+        }
+
         private sealed class GradeGraph
         {
             public readonly Dictionary<(int, int), int> Index = new Dictionary<(int, int), int>();
-            public readonly List<List<(int To, float Cost)>> Edges = new List<List<(int, float)>>();
+            public readonly List<List<(int To, float Cost, float Relaxed)>> Edges = new List<List<(int, float, float)>>();
             public readonly List<float> Target = new List<float>();     // planned offset (0 = ground)
             public readonly List<float> Reference = new List<float>();  // height the offset is measured from
             public readonly List<bool> HasStructuralReference = new List<bool>();
@@ -56,7 +82,7 @@ namespace cs2_osm_importer
                 {
                     i = Edges.Count;
                     Index[key] = i;
-                    Edges.Add(new List<(int, float)>());
+                    Edges.Add(new List<(int, float, float)>());
                     Target.Add(target);
                     Reference.Add(reference);
                     HasStructuralReference.Add(structuralReference);
@@ -87,12 +113,13 @@ namespace cs2_osm_importer
         private static void ApplyGradeLimitedElevations(List<OsmWay> ways)
         {
             var graph = new GradeGraph();
+            var levelCrossings = FindLevelCrossings(ways);
             var plans = PlanStructures(ways);
             var wayNodes = new List<(OsmWay Way, int[] Nodes)>();
             foreach (var way in ways)
             {
                 var pts = way.Points;
-                if (pts.Count < 2 || way.IsPier)
+                if (pts.Count < 2 || way.IsPier || IsPedestrianDetailFootway(way))
                     continue;
                 var heights = way.TerrainHeights.Count == pts.Count ? way.TerrainHeights : null;
                 var structural = way.UsesStructuralElevation && heights != null;
@@ -120,11 +147,14 @@ namespace cs2_osm_importer
                     nodes[i] = graph.Node(pts[i], reference, structural, pointTarget, i > 0 && i < pts.Count - 1);
                 }
                 var grade = MaxGrade(way);
+                var relaxedGrade = MaxClearanceGrade(way);
                 for (var i = 1; i < pts.Count; i++)
                 {
-                    var cost = math.distance(pts[i - 1].xz, pts[i].xz) * grade;
-                    graph.Edges[nodes[i - 1]].Add((nodes[i], cost));
-                    graph.Edges[nodes[i]].Add((nodes[i - 1], cost));
+                    var length = math.distance(pts[i - 1].xz, pts[i].xz);
+                    var cost = length * grade;
+                    var relaxed = length * relaxedGrade;
+                    graph.Edges[nodes[i - 1]].Add((nodes[i], cost, relaxed));
+                    graph.Edges[nodes[i]].Add((nodes[i - 1], cost, relaxed));
                     graph.Degree[nodes[i - 1]]++;
                     graph.Degree[nodes[i]]++;
                 }
@@ -152,6 +182,7 @@ namespace cs2_osm_importer
                     o = math.max(o, lo[i]);
                 offset[i] = o;
             }
+            ResolveLevelCrossings(graph, n, wayNodes, offset, levelCrossings);
 
             var maxSlopeBefore = 0f;
             var maxSlopeAfter = 0f;
@@ -181,11 +212,143 @@ namespace cs2_osm_importer
                          $"(bridges and tunnels ramp at most 6-12% by road type, junctions keep their height).");
         }
 
+        private const int LevelCrossingPasses = 4;
+
+        /// <summary>
+        /// Structure planning asks each bridge for clearance over what it crosses, but the grade limits then decide:
+        /// a bridge whose crossing lies 10-40 m from where it lands, or from a junction, stays as low as the normal
+        /// grade allows, and a footbridge 2 m over a street or a ramp through the road below were common (578 crossings
+        /// under 4.5 m on full Seattle, 75% of them grade-limited or near the bridge's end). Here each crossing between
+        /// ways at different OSM levels is checked after grading: where the gap is short, the moving way (bridge up,
+        /// tunnel down) gets a height source at the crossing that spreads at the steeper clearance grade, still bounded
+        /// by every junction's height at that grade. A few passes, so a deck lifted over one road can lift the deck
+        /// above it in turn. What still lacks room (a crossing right at a junction) is counted and left.
+        /// </summary>
+        private static void ResolveLevelCrossings(GradeGraph graph, int n, List<(OsmWay Way, int[] Nodes)> wayNodes, float[] offset,
+            List<LevelCrossing> crossings)
+        {
+            if (crossings.Count == 0 || n == 0)
+                return;
+            var nodesOf = new Dictionary<OsmWay, int[]>();
+            foreach (var (w, ns) in wayNodes)
+                nodesOf[w] = ns;
+            var items = new List<(LevelCrossing C, int Node, int[] Other, int Seg, float T, int Partner)>();
+            foreach (var c in crossings)
+            {
+                if (!nodesOf.TryGetValue(c.Mover, out var moverNodes) || !nodesOf.TryGetValue(c.Other, out var otherNodes))
+                    continue;
+                var mi = c.Mover.Points.FindIndex(p => math.distancesq(p.xz, c.At) < 1e-4f);
+                if (mi < 0 || !TryProjectOnWay(c.Other.Points, c.At, out var seg, out var t))
+                    continue;
+                var pi = c.HasPartner ? c.Other.Points.FindIndex(p => math.distancesq(p.xz, c.Partner) < 1e-4f) : -1;
+                items.Add((c, moverNodes[mi], otherNodes, seg, t, pi >= 0 ? otherNodes[pi] : -1));
+            }
+
+            float Gap((LevelCrossing C, int Node, int[] Other, int Seg, float T, int Partner) it, float[] off)
+            {
+                var mover = graph.Reference[it.Node] + off[it.Node];
+                var other = math.lerp(graph.Reference[it.Other[it.Seg - 1]] + off[it.Other[it.Seg - 1]],
+                    graph.Reference[it.Other[it.Seg]] + off[it.Other[it.Seg]], it.T);
+                return it.C.Up ? mover - other : other - mover;
+            }
+
+            var reach = offset.Max(o => math.abs(o)) + 40f;
+            var hi = Propagate(graph, n, i => graph.Degree[i] >= 3 ? -graph.PinOffset[i] : float.NegativeInfinity, true, -reach, relaxed: true);
+            var lo = Propagate(graph, n, i => graph.Degree[i] >= 3 ? graph.PinOffset[i] : float.NegativeInfinity, true, -reach, relaxed: true);
+            float Ceiling(int i) => float.IsNegativeInfinity(hi[i]) ? float.PositiveInfinity : -hi[i];
+            float Floor(int i) => float.IsNegativeInfinity(lo[i]) ? float.NegativeInfinity : lo[i];
+            var up = new float[n];
+            var down = new float[n];
+            for (var i = 0; i < n; i++)
+                up[i] = down[i] = float.NegativeInfinity;
+
+            var final = (float[])offset.Clone();
+            var shortBefore = items.Count(it => Gap(it, final) < it.C.Clearance - 0.05f);
+            for (var pass = 0; pass < LevelCrossingPasses; pass++)
+            {
+                var added = false;
+                bool Raise(float[] sources, int node, float want)
+                {
+                    if (want <= sources[node] + 0.01f)
+                        return false;
+                    sources[node] = want;
+                    return true;
+                }
+                foreach (var it in items)
+                {
+                    var deficit = it.C.Clearance - Gap(it, final);
+                    if (deficit <= 0.05f)
+                        continue;
+                    if (it.C.Up)
+                    {
+                        // The bridge rises as far as its junctions allow; a ground way below dips for the rest.
+                        var rise = math.min(deficit, math.max(0f, Ceiling(it.Node) - final[it.Node]));
+                        if (rise > 0.05f)
+                            added |= Raise(up, it.Node, final[it.Node] + rise);
+                        var rest = deficit - rise;
+                        if (rest > 0.05f && it.Partner >= 0)
+                            added |= Raise(down, it.Partner, -(final[it.Partner] - rest));
+                    }
+                    else
+                        added |= Raise(down, it.Node, -(final[it.Node] - deficit));
+                }
+                if (!added)
+                    break;
+                var upSpread = Propagate(graph, n, i => up[i], true, -reach, relaxed: true);
+                var downSpread = Propagate(graph, n, i => down[i], true, -reach, relaxed: true);
+                for (var i = 0; i < n; i++)
+                {
+                    var o = offset[i];
+                    if (!float.IsNegativeInfinity(upSpread[i]))
+                        o = math.max(o, math.min(upSpread[i], Ceiling(i)));
+                    if (!float.IsNegativeInfinity(downSpread[i]))
+                        o = math.min(o, math.max(-downSpread[i], Floor(i)));
+                    final[i] = o;
+                }
+            }
+
+            var shortAfter = 0;
+            var dipped = 0;
+            foreach (var it in items)
+            {
+                if (it.Partner >= 0 && final[it.Partner] < offset[it.Partner] - 0.5f)
+                    dipped++;
+                if (it.C.Clearance - Gap(it, final) > 0.05f)
+                    shortAfter++;
+            }
+            Array.Copy(final, offset, n);
+            Mod.log.Info($"Level crossings: {items.Count} bridges/tunnels crossing a way at another OSM level, {shortBefore} short of clearance " +
+                         $"({LevelClearanceOverRoadMeters} m over roads/rail, {LevelClearanceOverPathMeters} m over paths) after grading; " +
+                         $"{shortBefore - shortAfter} given room at up to the clearance grade ({dipped} with the way below dipping under), " +
+                         $"{shortAfter} still short (junctions too close on both).");
+        }
+
+        private static bool TryProjectOnWay(List<float3> pts, float2 at, out int seg, out float t)
+        {
+            seg = -1;
+            t = 0f;
+            var best = float.MaxValue;
+            for (var i = 1; i < pts.Count; i++)
+            {
+                var ab = pts[i].xz - pts[i - 1].xz;
+                var len2 = math.lengthsq(ab);
+                var tt = len2 > 1e-6f ? math.saturate(math.dot(at - pts[i - 1].xz, ab) / len2) : 0f;
+                var d = math.distancesq(at, pts[i - 1].xz + ab * tt);
+                if (d < best)
+                {
+                    best = d;
+                    seg = i;
+                    t = tt;
+                }
+            }
+            return seg > 0 && best < 1f;
+        }
+
         /// <summary>
         /// Multi-source spread on the grade graph: value(i) = max over sources s of (start(s) - cost(s, i)), cut off at
         /// floor. Returns NegativeInfinity where nothing reached.
         /// </summary>
-        private static float[] Propagate(GradeGraph graph, int n, Func<int, float> start, bool decreasing, float floor)
+        private static float[] Propagate(GradeGraph graph, int n, Func<int, float> start, bool decreasing, float floor, bool relaxed = false)
         {
             var value = new float[n];
             var heap = new List<(float Value, int Node)>();
@@ -200,9 +363,9 @@ namespace cs2_osm_importer
                 var (v, u) = HeapPop(heap);
                 if (v < value[u])
                     continue;
-                foreach (var (to, cost) in graph.Edges[u])
+                foreach (var (to, cost, relaxedCost) in graph.Edges[u])
                 {
-                    var w = v - cost;
+                    var w = v - (relaxed ? relaxedCost : cost);
                     if (w <= floor || w <= value[to])
                         continue;
                     value[to] = w;

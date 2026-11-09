@@ -4493,7 +4493,10 @@ namespace cs2_osm_importer
             if (isCutting)
                 offset -= options.CuttingDepthMeters;
 
-            if (!hasLayer && offset == 0f && (IsElevatedRailType(highwayType) || IsElevatedRailType(railwayType)))
+            // A monorail runs on its beam even where OSM has no bridge tag. Light rail and subway without one are at
+            // ground level (Seattle's Link through SODO and its maintenance yard were built 10 m up in the air).
+            if (!hasLayer && offset == 0f && (string.Equals(highwayType, "monorail", StringComparison.OrdinalIgnoreCase) ||
+                                              string.Equals(railwayType, "monorail", StringComparison.OrdinalIgnoreCase)))
                 offset += options.LayerElevationStepMeters;
 
             return offset;

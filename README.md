@@ -53,6 +53,11 @@ Choose which loaded road types to generate, then click **Generate Roads**.
 - **Roads can overlap railways.** In places where an OSM road crosses or runs beside a rail line (several Seattle light
   rail and tram corridors), the built road lies on top of the tracks instead of crossing them cleanly, and CS2 then
   draws a pile of overlapping crosswalks there. Cause not yet investigated.
+- **Some bridges still sit too low over what they cross.** A bridge is lifted to clear what passes under it, and
+  where it cannot rise enough the road, path or railway below dips under it. Where a junction is close to the
+  crossing on both of them, neither can move far enough, and the deck clips the way below (about 240 of 2100 such
+  crossings on full Seattle, mostly short footbridges in dense spots). A path that joins a bridge in the middle of
+  its span is sometimes left unconnected there.
 - **Lakes only fill where the heightmap has a lake bed below the shore.** Lakes, ponds and reservoirs are filled with
   constant-level water sources at the height of the ground just outside their OSM outline. That needs the heightmap's
   lake bed to sit below that shore (it does on Green Lake). A lake whose bed is at the same height as its shore is

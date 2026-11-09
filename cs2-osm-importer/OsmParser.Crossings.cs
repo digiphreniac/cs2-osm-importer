@@ -77,6 +77,38 @@ namespace cs2_osm_importer
             }
 
             /// <summary>
+            /// Every crossing of the piece a-b with another way at any level (the position on the other way), except
+            /// where the other way has a point at a or b (a junction).
+            /// </summary>
+            public IEnumerable<(OsmWay Way, float3 At)> Crossings(float3 a, float3 b, OsmWay self)
+            {
+                var length = math.distance(a.xz, b.xz);
+                if (length < 1e-3f)
+                    yield break;
+                var lo = math.min(a.xz, b.xz);
+                var hi = math.max(a.xz, b.xz);
+                var seen = new HashSet<Seg>();
+                for (var x = (int)math.floor(lo.x / CellSize); x <= (int)math.floor(hi.x / CellSize); x++)
+                    for (var z = (int)math.floor(lo.y / CellSize); z <= (int)math.floor(hi.y / CellSize); z++)
+                    {
+                        if (!_cells.TryGetValue((x, z), out var cell))
+                            continue;
+                        foreach (var seg in cell)
+                        {
+                            if (seg.Way == self || !seen.Add(seg))
+                                continue;
+                            if (!SegmentsCross(a.xz, b.xz, seg.A.xz, seg.B.xz, out var u, out var v))
+                                continue;
+                            var along = u * length;
+                            if ((along < CrossingEndToleranceMeters || along > length - CrossingEndToleranceMeters) &&
+                                HasPointNear(seg.Way, along < CrossingEndToleranceMeters ? a.xz : b.xz))
+                                continue;
+                            yield return (seg.Way, math.lerp(seg.A, seg.B, v));
+                        }
+                    }
+            }
+
+            /// <summary>
             /// The crossing nearest a along the new piece a-b of <paramref name="self"/> with another way at self's
             /// OSM level, if any (whatever their heights there: tagged as one level, they are meant to meet). Touching
             /// another way at a or b is a junction and does not count. <paramref name="heightGap"/> is how far apart
@@ -197,6 +229,145 @@ namespace cs2_osm_importer
             }
             Mod.log.Info($"Same-level crossings: {joined} roads/paths crossing at one level without a shared node joined there; " +
                          $"{apart} left (more than {CrossingJoinMaxGapMeters:F0} m apart in height), {bothNear} left (both ways have a point beside the crossing).");
+        }
+
+        /// <summary>
+        /// Where two ways at different OSM levels cross: <see cref="Mover"/> is the one whose height can change to
+        /// make room (the bridge over a street, the tunnel under one), <see cref="Up"/> says which way it moves, and
+        /// <see cref="Other"/> stays put. Mover has a point of its own at <see cref="At"/>.
+        /// </summary>
+        private sealed class LevelCrossing
+        {
+            public OsmWay Mover;
+            public OsmWay Other;
+            public bool Up;
+            public float2 At;
+            public float Clearance;
+            // A ground way below that may dip under Mover: its own point beside the crossing.
+            public bool HasPartner;
+            public float2 Partner;
+        }
+
+        private static bool IsBridgeStructure(OsmWay w) => w.UsesStructuralElevation && w.IsBridge && !w.IsPier;
+        private static bool IsTunnelStructure(OsmWay w) => w.UsesStructuralElevation && w.IsTunnel;
+
+        // Height between centre lines where a way passes over another: a road or track below needs room for trucks
+        // and trains plus the deck; a path below needs less.
+        private const float LevelClearanceOverRoadMeters = 6.5f;
+        private const float LevelClearanceOverPathMeters = 4.5f;
+        // Crossings of the same two ways closer than this are one crossing (a curve drawn twice through the grid).
+        private const float LevelCrossingMergeMeters = 1f;
+
+        /// <summary>
+        /// Every crossing between ways at different OSM levels, with a point inserted into the way that moves. Only
+        /// a bridge (moves up) or a tunnel (moves down) moves; a way at another level only by layer=* stays on the
+        /// ground (a covered walkway, a floor of a passage), so where it crosses a ground way nothing can move and
+        /// the crossing is left out. Indoor ways and piers are left out too.
+        /// </summary>
+        private static List<LevelCrossing> FindLevelCrossings(List<OsmWay> ways)
+        {
+            var usable = ways.Where(w => !w.IsIndoor && !w.IsPier && !IsPedestrianDetailFootway(w) && !w.IsNodeRoundabout && w.Points.Count > 1).ToList();
+            var index = new WayCrossingIndex(usable);
+            var found = new List<LevelCrossing>();
+            var seen = new HashSet<(OsmWay, OsmWay, int, int)>();
+            foreach (var w in usable)
+            {
+                var level = OsmLevel(w);
+                if (level == 0)
+                    continue; // a crossing at different levels always involves a way off level 0; found from that side
+                for (var i = 1; i < w.Points.Count; i++)
+                {
+                    foreach (var (other, at) in index.Crossings(w.Points[i - 1], w.Points[i], w))
+                    {
+                        var otherLevel = OsmLevel(other);
+                        if (otherLevel == level)
+                            continue;
+                        var upper = level > otherLevel ? w : other;
+                        var lower = level > otherLevel ? other : w;
+                        OsmWay mover;
+                        bool up;
+                        if (IsBridgeStructure(upper))
+                        {
+                            mover = upper;
+                            up = true;
+                        }
+                        else if (IsTunnelStructure(lower))
+                        {
+                            mover = lower;
+                            up = false;
+                        }
+                        else
+                            continue;
+                        var a = mover.GetHashCode() < (mover == upper ? lower : upper).GetHashCode();
+                        var cell = ((int)math.floor(at.x / LevelCrossingMergeMeters), (int)math.floor(at.z / LevelCrossingMergeMeters));
+                        var key = a ? (upper, lower, cell.Item1, cell.Item2) : (lower, upper, cell.Item1, cell.Item2);
+                        if (!seen.Add(key))
+                            continue;
+                        found.Add(new LevelCrossing
+                        {
+                            Mover = mover,
+                            Other = mover == upper ? lower : upper,
+                            Up = up,
+                            At = at.xz,
+                            Clearance = IsPathLike(lower) ? LevelClearanceOverPathMeters : LevelClearanceOverRoadMeters
+                        });
+                    }
+                }
+            }
+            // Points go in after the search, so no crossing was looked for on a half-changed way. No new point may sit
+            // where the other way has one: grading keys points by plan position, and the two would become one junction.
+            foreach (var c in found)
+            {
+                var target = HasPointWithin(c.Other, c.At, 0.1f) ? AlongWay(c.Mover, c.At, 0.15f) : new float3(c.At.x, 0f, c.At.y);
+                var p = InsertPointOnWay(c.Mover, target, 0.5f);
+                if (HasPointWithin(c.Other, p.xz, 0.05f))
+                {
+                    c.Mover = null;
+                    continue;
+                }
+                c.At = p.xz;
+                // A ground way below may dip to pass under (a ramp in its trench under Yesler Way, where the heightmap
+                // has filled the trench up to the deck): it gets a point of its own just beside the crossing.
+                if (c.Up && CanDipUnder(c.Other))
+                {
+                    var q = InsertPointOnWay(c.Other, AlongWay(c.Other, c.At, 0.1f));
+                    if (!HasPointWithin(c.Mover, q.xz, 0.05f))
+                    {
+                        c.Partner = q.xz;
+                        c.HasPartner = true;
+                    }
+                }
+            }
+            found.RemoveAll(c => c.Mover == null);
+            return found;
+        }
+
+        private static bool CanDipUnder(OsmWay w)
+        {
+            if (w.UsesStructuralElevation || w.IsPier || w.IsIndoor || w.IsNodeRoundabout)
+                return false;
+            if (IsVehicleRoad(w) || IsPathLike(w))
+                return true;
+            switch ((w.Highway ?? string.Empty).ToLowerInvariant())
+            {
+                case "rail": case "light_rail": case "subway": case "narrow_gauge":
+                    return true;
+                default:
+                    return false; // a tram lies in its street; the street does not dip with it
+            }
+        }
+
+        /// <summary>The position <paramref name="meters"/> along the way's segment nearest <paramref name="at"/>.</summary>
+        private static float3 AlongWay(OsmWay way, float2 at, float meters)
+        {
+            if (!TryProjectOnWay(way.Points, at, out var seg, out var t))
+                return new float3(at.x, 0f, at.y);
+            var a = way.Points[seg - 1].xz;
+            var b = way.Points[seg].xz;
+            var len = math.max(1e-3f, math.distance(a, b));
+            var dir = (b - a) / len;
+            var p = (1f - t) * len >= meters + 0.06f ? at + dir * meters : at - dir * meters;
+            return new float3(p.x, 0f, p.y);
         }
 
         private static bool HasPointNear(OsmWay way, float2 p) => HasPointWithin(way, p, 0.05f);
