@@ -2398,11 +2398,13 @@ namespace cs2_osm_importer
                     AddSideFlags(ref flags, way.RestrictedLaneSide, CompositionFlags.Side.PrimaryLane);
 
                 // A tram running along this stretch of the road (OsmParser.MergeStreetTrams): the road's own tram
-                // tracks, both directions.
+                // tracks, both directions. Bike lanes are left off there: with both on a road, the bike lane groups the
+                // tram lane under a lane trams cannot use, and the game's pathfinder finds no tram route along it
+                // (Yesler Way and Broadway in Seattle; cyclists still ride the road's own lanes).
                 if (way.TramStretches.Count > 0 && curveLookup.HasComponent(edgeEntity) && OnTramStretch(way, curveLookup[edgeEntity].m_Bezier))
                 {
-                    flags.m_Left |= CompositionFlags.Side.PrimaryTrack;
-                    flags.m_Right |= CompositionFlags.Side.PrimaryTrack;
+                    flags.m_Left = (flags.m_Left & ~CompositionFlags.Side.SecondaryLane) | CompositionFlags.Side.PrimaryTrack;
+                    flags.m_Right = (flags.m_Right & ~CompositionFlags.Side.SecondaryLane) | CompositionFlags.Side.PrimaryTrack;
                     tramEdges++;
                 }
 

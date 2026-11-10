@@ -54,9 +54,10 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   curved track at each corner where the line turns onto another street. Elsewhere, where an OSM road runs on top of a
   rail line (service roads in rail yards, light rail in the median of Martin Luther King Jr Way), the built road
   still lies on the tracks, and CS2 draws a pile of overlapping crosswalks there.
-- **Some street tram lines cannot be used by trams yet.** On full Seattle, trams can run the Jackson St part of the
-  First Hill Streetcar and the South Lake Union line southbound. The First Hill line stops at a few junctions on
-  Yesler Way and Broadway, and the South Lake Union line northbound has no route. Cause still being investigated.
+- **Some street tram lines can only be used in one direction.** On full Seattle, trams can run the First Hill
+  Streetcar outbound (Jackson St to Broadway) and the South Lake Union line southbound, but not the other way: the
+  track has a gap in one direction at a few junctions. Cause still being investigated. Streets that carry a tram get
+  no painted bike lanes (cyclists ride in the road's lanes there): with both, trams could not be routed along them.
 - **Some bridges still sit too low over what they cross.** A bridge is lifted to clear what passes under it, and
   where it cannot rise enough the road, path or railway below dips under it. Where a junction is close to the
   crossing on both of them, neither can move far enough, and the deck clips the way below (about 240 of 2100 such

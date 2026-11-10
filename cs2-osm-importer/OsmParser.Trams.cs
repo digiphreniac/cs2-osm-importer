@@ -60,6 +60,69 @@ namespace cs2_osm_importer
         }
 
         /// <summary>
+        /// A street's tram track stops where a turn curve meets it: track on the street between that point and the
+        /// junction would reach the curve's end node alongside the curve, at almost the same angle, and CS2 then joins
+        /// neither (a dead end at the South Lake Union line's turn off Westlake). The mapped tram often rejoins the street
+        /// before the curve's end point, so stretches there are cut back to it, or dropped when wholly on the junction side.
+        /// Returns how many stretches were changed.
+        /// </summary>
+        private static int TrimStretchesAtCurves(List<(OsmWay Road, float2 At, float2 Away, float ToJunction)> curveEnds, IEnumerable<OsmWay> tramRoads)
+        {
+            const float reach = TramMaxTurnMeters, slack = 0.5f, lineWidth = 3f;
+            var changed = 0;
+            // A curve end where tram track also runs on past the junction, on this street or the next way along it,
+            // is a line going straight through the junction as well: its track is left alone there.
+            var through = new HashSet<int>();
+            var allEnds = tramRoads.SelectMany(r => r.TramStretches).SelectMany(t => new[] { t.A, t.B }).ToList();
+            for (var z = 0; z < curveEnds.Count; z++)
+            {
+                var (_, at, away, toJ) = curveEnds[z];
+                foreach (var p in allEnds)
+                {
+                    var s = math.dot(p - at, away);
+                    var off = math.length(p - at - s * away);
+                    if (off < lineWidth && s < -(toJ + 2f) && s > -(toJ + reach))
+                    {
+                        through.Add(z);
+                        break;
+                    }
+                }
+            }
+            foreach (var road in curveEnds.Select(c => c.Road).Distinct())
+            {
+                var ends = curveEnds.Where((c, z) => c.Road == road && !through.Contains(z)).ToList();
+                var kept = new List<(float2 A, float2 B)>();
+                foreach (var (a0, b0) in road.TramStretches)
+                {
+                    var a = a0;
+                    var b = b0;
+                    var drop = false;
+                    foreach (var (_, at, away, toJ) in ends)
+                    {
+                        if (math.distance(a, at) > reach && math.distance(b, at) > reach)
+                            continue;
+                        // An end between the curve's end and the junction (the curve leaves at most TramTurnMeters
+                        // from it). An end beyond the junction is another line running straight through: left alone.
+                        var sa = math.dot(a - at, away);
+                        var sb = math.dot(b - at, away);
+                        var inA = sa < -slack && sa > -(toJ + slack);
+                        var inB = sb < -slack && sb > -(toJ + slack);
+                        if (inA && inB) { drop = true; break; }
+                        if (inA && sb >= -slack) a = at;
+                        else if (inB && sa >= -slack) b = at;
+                    }
+                    if (drop || !a.Equals(a0) || !b.Equals(b0))
+                        changed++;
+                    if (!drop && math.distance(a, b) > 0.01f)
+                        kept.Add((a, b));
+                }
+                road.TramStretches.Clear();
+                road.TramStretches.AddRange(kept);
+            }
+            return changed;
+        }
+
+        /// <summary>
         /// The tram's curve from street A (where it runs at 'fromA') to street B (at 'toB'): the streets' shared junction
         /// J; a point on each street TramTurnMeters from J towards the tram (at most up to 6 m short of that street's next
         /// junction); and a curve between them tangent to both streets (a quadratic Bezier through J's corner). Both end
@@ -232,6 +295,8 @@ namespace cs2_osm_importer
             var builtTurns = 0;
             var builtCurves = new HashSet<((int, int), (int, int))>();
             var failedTurns = 0;
+            // Where each turn curve meets a street, and the direction along the street away from the junction.
+            var curveEnds = new List<(OsmWay Road, float2 At, float2 Away, float ToJunction)>();
             // How many roads use each point: a point used by more than one is a junction (footway crossings are not).
             var use = new Dictionary<(int, int), int>();
             foreach (var w in ways.Where(IsVehicleRoad))
@@ -330,6 +395,10 @@ namespace cs2_osm_importer
                     // Each street keeps its tram track up to where the curve leaves it.
                     roadAt[before].TramStretches.Add((proj[before].xz, curve[0].xz));
                     roadAt[after].TramStretches.Add((curve[curve.Count - 1].xz, proj[after].xz));
+                    // The junction: the quadratic curve's control point, from its middle point and ends.
+                    var junction = 2f * curve[curve.Count / 2].xz - 0.5f * (curve[0].xz + curve[curve.Count - 1].xz);
+                    curveEnds.Add((roadAt[before], curve[0].xz, math.normalizesafe(curve[0].xz - curve[1].xz), math.distance(curve[0].xz, junction)));
+                    curveEnds.Add((roadAt[after], curve[curve.Count - 1].xz, math.normalizesafe(curve[curve.Count - 1].xz - curve[curve.Count - 2].xz), math.distance(curve[curve.Count - 1].xz, junction)));
                     roadsWithTrams.Add(roadAt[before]);
                     roadsWithTrams.Add(roadAt[after]);
                     for (var k = before + 1; k <= after; k++)
@@ -413,6 +482,8 @@ namespace cs2_osm_importer
             }
             if (dropped.Count == 0)
                 return ways;
+            var trimmed = TrimStretchesAtCurves(curveEnds, roadsWithTrams);
+            Mod.log.Info($"Street trams: {trimmed} street stretches trimmed back to where a turn curve meets them.");
             Mod.log.Info($"Street trams: {onRoadLength / 1000f:F1} km of tram track running along {roadsWithTrams.Count} roads built as those roads' tram tracks; " +
                          $"{keptLength / 1000f:F1} km on its own right-of-way kept as tram track ({added.Count - builtTurns} pieces); " +
                          $"{builtTurns} turns from one street onto another given a curve of their own ({failedTurns} kept as mapped: no room).");

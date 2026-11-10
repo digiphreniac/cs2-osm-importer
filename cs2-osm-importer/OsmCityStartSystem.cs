@@ -50,6 +50,11 @@ namespace cs2_osm_importer
 
         protected override void OnUpdate()
         {
+            if (_framesUntilTramRestore >= 0 && --_framesUntilTramRestore <= 0)
+            {
+                _framesUntilTramRestore = -1;
+                RestoreTramEdges();
+            }
             if (_framesUntilRefresh < 0 || --_framesUntilRefresh > 0)
                 return;
             _framesUntilRefresh = -1;
@@ -75,6 +80,63 @@ namespace cs2_osm_importer
             }
             if (nodesTouched > 0)
                 Mod.log.Info($"New city: refreshed {nodesTouched} network junctions so the game rebuilds their lanes (crosswalks were missing).");
+            StartTramLaneRebuild();
+        }
+
+        // Street tram edges come in from the map with lanes the game's pathfinder cannot route a tram along at some
+        // junctions (on Broadway in Seattle the tram lanes kept ForbidPassing and MergingLane flags from when the edge was
+        // built; marking the edge Updated keeps them). A real change of the edge's composition rebuilds them: verified in
+        // game by adding bike lanes and taking them off again. Taking the tram track itself off and back does not work
+        // (it left every junction without tram lanes), so the bike-lane flag is flipped for a few frames and restored.
+        private const int TramRestoreFrames = 30;
+        private readonly System.Collections.Generic.List<(Entity Edge, Upgraded Original)> _tramEdges = new System.Collections.Generic.List<(Entity Edge, Upgraded Original)>();
+        private int _framesUntilTramRestore = -1;
+
+        private void StartTramLaneRebuild()
+        {
+            const Game.Prefabs.CompositionFlags.Side track = Game.Prefabs.CompositionFlags.Side.PrimaryTrack;
+            const Game.Prefabs.CompositionFlags.Side bike = Game.Prefabs.CompositionFlags.Side.SecondaryLane;
+            using var edges = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new[] { ComponentType.ReadOnly<Edge>(), ComponentType.ReadOnly<Upgraded>() },
+                None = new[] { ComponentType.ReadOnly<Deleted>(), ComponentType.ReadOnly<Temp>() }
+            }).ToEntityArray(Allocator.Temp);
+            _tramEdges.Clear();
+            foreach (var e in edges)
+            {
+                var up = EntityManager.GetComponentData<Upgraded>(e);
+                if (((up.m_Flags.m_Left | up.m_Flags.m_Right) & track) == 0)
+                    continue;
+                _tramEdges.Add((e, up));
+                up.m_Flags.m_Left ^= bike;
+                up.m_Flags.m_Right ^= bike;
+                EntityManager.SetComponentData(e, up);
+                MarkEdgeAndNodesUpdated(e);
+            }
+            _framesUntilTramRestore = _tramEdges.Count > 0 ? TramRestoreFrames : -1;
+        }
+
+        private void RestoreTramEdges()
+        {
+            var restored = 0;
+            foreach (var (e, original) in _tramEdges)
+            {
+                if (!EntityManager.Exists(e) || EntityManager.HasComponent<Deleted>(e) || !EntityManager.HasComponent<Upgraded>(e))
+                    continue;
+                EntityManager.SetComponentData(e, original);
+                MarkEdgeAndNodesUpdated(e);
+                restored++;
+            }
+            _tramEdges.Clear();
+            Mod.log.Info($"New city: rebuilt the lanes of {restored} street tram edges so trams can be routed along them.");
+        }
+
+        private void MarkEdgeAndNodesUpdated(Entity e)
+        {
+            var edge = EntityManager.GetComponentData<Edge>(e);
+            foreach (var t in new[] { e, edge.m_Start, edge.m_End })
+                if (EntityManager.Exists(t) && !EntityManager.HasComponent<Updated>(t))
+                    EntityManager.AddComponent<Updated>(t);
         }
     }
 }
