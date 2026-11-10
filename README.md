@@ -50,9 +50,13 @@ Choose which loaded road types to generate, then click **Generate Roads**.
   - Another network lies between the lot and the street at the entrance point, such as a separately mapped bike path
     (cycleway) or tram line. The lot's entrance links to that network instead of the street.
   - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
-- **Roads can overlap railways.** In places where an OSM road crosses or runs beside a rail line (several Seattle light
-  rail and tram corridors), the built road lies on top of the tracks instead of crossing them cleanly, and CS2 then
-  draws a pile of overlapping crosswalks there. Cause not yet investigated.
+- **Roads can overlap railways.** Street trams mapped along a road are built as tram tracks on that road, with a
+  curved track at each corner where the line turns onto another street. Elsewhere, where an OSM road runs on top of a
+  rail line (service roads in rail yards, light rail in the median of Martin Luther King Jr Way), the built road
+  still lies on the tracks, and CS2 draws a pile of overlapping crosswalks there.
+- **Some street tram lines cannot be used by trams yet.** On full Seattle, trams can run the Jackson St part of the
+  First Hill Streetcar and the South Lake Union line southbound. The First Hill line stops at a few junctions on
+  Yesler Way and Broadway, and the South Lake Union line northbound has no route. Cause still being investigated.
 - **Some bridges still sit too low over what they cross.** A bridge is lifted to clear what passes under it, and
   where it cannot rise enough the road, path or railway below dips under it. Where a junction is close to the
   crossing on both of them, neither can move far enough, and the deck clips the way below (about 240 of 2100 such

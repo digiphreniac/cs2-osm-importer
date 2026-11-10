@@ -277,6 +277,8 @@ namespace cs2_osm_importer
         // OSM crossings within a few metres of a junction: not upgrades of their own (the junction draws crosswalks),
         // but they say which of the junction's legs has a real crossing.
         public List<OsmRoadNodeFeature> JunctionCrossings { get; } = new List<OsmRoadNodeFeature>();
+        // Stretches of this road (start and end in plan) where a tram runs along it: built as the road's tram tracks.
+        public List<(float2 A, float2 B)> TramStretches { get; } = new List<(float2 A, float2 B)>();
         public List<OsmRoadNodeFeature> StopSigns { get; } = new List<OsmRoadNodeFeature>();
         public List<OsmRoadNodeFeature> TrafficLights { get; } = new List<OsmRoadNodeFeature>();
         public List<OsmTurnRestriction> TurnRestrictions { get; } = new List<OsmTurnRestriction>();

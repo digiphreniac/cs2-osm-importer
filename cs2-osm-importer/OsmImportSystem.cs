@@ -2318,6 +2318,23 @@ namespace cs2_osm_importer
             spatialIndex.Dispose();
         }
 
+        // An edge carries the tram when its middle lies on one of the way's tram stretches.
+        private const float TramStretchMeters = 3f;
+
+        private static bool OnTramStretch(OsmWay way, Colossal.Mathematics.Bezier4x3 curve)
+        {
+            var mid = Colossal.Mathematics.MathUtils.Position(curve, 0.5f).xz;
+            foreach (var (a, b) in way.TramStretches)
+            {
+                var ab = b - a;
+                var len2 = math.lengthsq(ab);
+                var t = len2 > 1e-6f ? math.saturate(math.dot(mid - a, ab) / len2) : 0f;
+                if (math.distance(a + ab * t, mid) <= TramStretchMeters)
+                    return true;
+            }
+            return false;
+        }
+
         private void ApplyRoadServiceUpgrades()
         {
             if (_roadServiceUpgradesApplied)
@@ -2330,6 +2347,8 @@ namespace cs2_osm_importer
 
             var edgeLookup = GetComponentLookup<Edge>(true);
             var nodeLookup = GetComponentLookup<Node>(true);
+            var curveLookup = GetComponentLookup<Curve>(true);
+            var tramEdges = 0;
             var upgradedEdges = 0;
             var upgradedNodes = 0;
             var chunkEntities = new HashSet<Entity>();
@@ -2378,6 +2397,15 @@ namespace cs2_osm_importer
                 if (_activeGenerateOptions == null || _activeGenerateOptions.GenerateRestrictedLanes)
                     AddSideFlags(ref flags, way.RestrictedLaneSide, CompositionFlags.Side.PrimaryLane);
 
+                // A tram running along this stretch of the road (OsmParser.MergeStreetTrams): the road's own tram
+                // tracks, both directions.
+                if (way.TramStretches.Count > 0 && curveLookup.HasComponent(edgeEntity) && OnTramStretch(way, curveLookup[edgeEntity].m_Bezier))
+                {
+                    flags.m_Left |= CompositionFlags.Side.PrimaryTrack;
+                    flags.m_Right |= CompositionFlags.Side.PrimaryTrack;
+                    tramEdges++;
+                }
+
                 if (HasAnyFlags(flags) && MergeUpgradedFlags(edgeEntity, flags))
                 {
                     upgradedEdges++;
@@ -2396,7 +2424,7 @@ namespace cs2_osm_importer
                 TrimMinorJunctionCrosswalks(chunkEntities);
 
             MarkChunksDirty(chunkEntities);
-            Mod.log.Info($"Applied road service upgrade flags to {upgradedEdges} generated edges and {upgradedNodes} generated nodes.");
+            Mod.log.Info($"Applied road service upgrade flags to {upgradedEdges} generated edges and {upgradedNodes} generated nodes ({tramEdges} edges given tram tracks).");
         }
 
         // Nodes that carry a mapped crossing's crosswalk upgrade (the nearest node to each crossing).
@@ -3552,6 +3580,39 @@ namespace cs2_osm_importer
         }
 
         private Entity GetPrefabForHighwayType(OsmWay way)
+        {
+            var prefab = ChoosePrefabForWay(way);
+            return way != null && way.TramStretches.Count > 0 ? TramCapablePrefab(prefab, way) : prefab;
+        }
+
+        private readonly Dictionary<string, Entity> _tramPrefabCache = new Dictionary<string, Entity>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// A street carrying streetcar track (OsmWay.TramStretches) must be a prefab that takes tram tracks: the highway
+        /// prefabs (Highway Twoway - 4 lanes and its asymmetric variants) and Alley take the PrimaryTrack upgrade but build
+        /// no track lanes (checked with the bridge's merge_test), which broke the line wherever such a road carried it.
+        /// Those are swapped for the city road of about the same width.
+        /// </summary>
+        private Entity TramCapablePrefab(Entity prefab, OsmWay way)
+        {
+            if (prefab == Entity.Null || _prefabSystem == null || !_prefabSystem.TryGetPrefab<PrefabBase>(prefab, out var current))
+                return prefab;
+            var name = current.name ?? string.Empty;
+            if (!name.StartsWith("Highway", StringComparison.OrdinalIgnoreCase) && !string.Equals(name, "Alley", StringComparison.OrdinalIgnoreCase))
+                return prefab;
+            var lanes = way.Lanes > 0 ? way.Lanes : way.LanesForward + way.LanesBackward;
+            var wanted = lanes <= 2 ? "Small Road" : lanes <= 4 ? "Medium Road" : "Large Road";
+            if (!_tramPrefabCache.TryGetValue(wanted, out var replacement))
+            {
+                if (!TryResolveRulePrefab(wanted, GetRoadPrefabCandidates().Where(p => p != null).Cast<PrefabBase>().ToList(), out replacement))
+                    replacement = Entity.Null;
+                _tramPrefabCache[wanted] = replacement;
+                Mod.log.Info($"Streets carrying tram track: '{name}' and similar built as '{wanted}' ({(replacement != Entity.Null ? "found" : "not found")}).");
+            }
+            return replacement != Entity.Null ? replacement : prefab;
+        }
+
+        private Entity ChoosePrefabForWay(OsmWay way)
         {
             if (way == null || string.IsNullOrWhiteSpace(way.Highway))
                 return _prefabEntity;
