@@ -302,6 +302,8 @@ namespace cs2_osm_importer
             finalWays = ReplaceMappedPedestrianDetails(finalWays, document.SourceNodePositions,
                 id => nodes.TryGetValue(id, out var n) && IsUnmarkedCrossingNode(n.Tags));
             finalWays = MergeStreetTrams(finalWays);
+            finalWays = DropServiceRoadsAlongRail(finalWays);
+            PushCarriagewaysOffRail(finalWays, document.SourceNodePositions);
             RelocatePathJoins(finalWays);
             SquarePathApproaches(finalWays);
             timer.Mark("pedestrianDetails");

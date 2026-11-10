@@ -51,9 +51,10 @@ Choose which loaded road types to generate, then click **Generate Roads**.
     (cycleway) or tram line. The lot's entrance links to that network instead of the street.
   - The entrance is aimed at a tight bend in the street (suspected, not confirmed).
 - **Roads can overlap railways.** Street trams mapped along a road are built as tram tracks on that road, with a
-  curved track at each corner where the line turns onto another street. Elsewhere, where an OSM road runs on top of a
-  rail line (service roads in rail yards, light rail in the median of Martin Luther King Jr Way), the built road
-  still lies on the tracks, and CS2 draws a pile of overlapping crosswalks there.
+  curved track at each corner where the line turns onto another street. Service roads running along rail tracks
+  (rail yards) are left out, and one-way carriageways either side of a track in a median (Martin Luther King Jr Way)
+  are moved out to clear it. Streets with freight track mapped along them (Colorado Ave S, the Marginal Ways in
+  Seattle) still lie on the track.
 - **Streets that carry a tram get no painted bike lanes.** Cyclists ride in the road's own lanes there: with both on
   a street, trams could not be routed along it. (On full Seattle, trams can run both street tram lines end to end
   in both directions.)
