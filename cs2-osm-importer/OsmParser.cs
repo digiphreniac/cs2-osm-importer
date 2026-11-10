@@ -309,6 +309,7 @@ namespace cs2_osm_importer
             timer.Mark("pedestrianDetails");
             AnchorSharedNodeHeights(finalWays, document.SourceNodePositions);
             UnifySharedPoints(finalWays);
+            finalWays = CollapseTinyRoadPieces(finalWays, document.SourceNodePositions);
             timer.Mark("sharedPoints");
             ReadParkingAreas(xml, wayElements, nodes, roadNodeIds, document, options);
             timer.Mark("parking");
