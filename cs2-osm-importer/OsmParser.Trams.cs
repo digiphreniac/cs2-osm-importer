@@ -19,6 +19,9 @@ namespace cs2_osm_importer
     {
         // A tram point is on a road when it lies within the road's half width plus this, running along it.
         private const float TramOnRoadExtraMeters = 2f;
+        // A street carrying a tram is built at least as a Small Road (about 6 m from its middle to its outer edge),
+        // however narrow its OSM tags make it: a tram mapped down one side of it is still on it (14th Ave S, one lane).
+        private const float TramRoadMinHalfWidthMeters = 6f;
         private const float TramOnRoadMaxAngleDegrees = 25f;
         // An off-road piece shorter than this between two on-road parts is part of the street run (a crossing, a stop).
         private const float TramMinOwnRightOfWayMeters = 15f;
@@ -33,6 +36,8 @@ namespace cs2_osm_importer
         private const float TramTurnMeters = 25f;
         // ... but not under this: a sharper curve than CS2's trams take.
         private const float TramMinTurnMeters = 12f;
+        // A turn needs the tram to run at least this far along each of the two streets.
+        private const float TramMinTurnRunMeters = 8f;
         // ... and at least this short of the street's next junction, so no sliver of road is left between them.
         private const float TramTurnJunctionClearMeters = 6f;
 
@@ -281,7 +286,7 @@ namespace cs2_osm_importer
                     if (math.abs(q.y - p.y) > 3f)
                         continue;
                     var d = math.distance(q.xz, p.xz);
-                    if (d > HalfWidth(road) + TramOnRoadExtraMeters || d >= best)
+                    if (d > math.max(HalfWidth(road), TramRoadMinHalfWidthMeters) + TramOnRoadExtraMeters || d >= best)
                         continue;
                     best = d;
                     onRoad = road;
@@ -333,8 +338,26 @@ namespace cs2_osm_importer
                 // carriageway of a divided street onto the other).
                 bool Aligned(int a, int b) => math.abs(math.dot(RoadDirection(roadAt[a], proj[a]), RoadDirection(roadAt[b], proj[b]))) >= TurnCos
                                               || math.dot(TramHeading(a, -1), TramHeading(b, 1)) >= TurnCos;
+                // How far the tram runs along the street at point i (or streets in line with it), backwards (-1) or
+                // forwards (+1). A turn needs the tram to run along both streets: a tram mapped beside a street can
+                // share one point with a side street's end (South Main Street at 14th Ave S), which is no turn.
+                float RunAlong(int i, int dirSign)
+                {
+                    var dir = RoadDirection(roadAt[i], proj[i]);
+                    var len = 0f;
+                    for (var k = i + dirSign; k >= 0 && k < n && on[k]; k += dirSign)
+                    {
+                        if (math.abs(math.dot(RoadDirection(roadAt[k], proj[k]), dir)) < TurnCos)
+                            break;
+                        len += math.distance(pts[k].xz, pts[k - dirSign].xz);
+                        if (len >= TramMinTurnRunMeters)
+                            break;
+                    }
+                    return len;
+                }
+                bool RunsAlongBoth(int a, int b) => RunAlong(a, -1) >= TramMinTurnRunMeters && RunAlong(b, 1) >= TramMinTurnRunMeters;
                 for (var i = 1; i < n; i++)
-                    if (on[i - 1] && on[i] && roadAt[i - 1] != roadAt[i] && !Aligned(i - 1, i))
+                    if (on[i - 1] && on[i] && roadAt[i - 1] != roadAt[i] && !Aligned(i - 1, i) && RunsAlongBoth(i - 1, i))
                         turns.Add((i - 1, i));
                 // Short stretches off the road between two on-road parts: the street run, or a turn between two streets.
                 for (var i = 0; i < n; i++)
@@ -351,7 +374,7 @@ namespace cs2_osm_importer
                     if (i > 0 && j < n)
                     {
                         len += math.distance(pts[i - 1].xz, pts[i].xz) + math.distance(pts[j - 1].xz, pts[j].xz);
-                        if (roadAt[i - 1] != roadAt[j] && !Aligned(i - 1, j) && len < TramMaxTurnMeters)
+                        if (roadAt[i - 1] != roadAt[j] && !Aligned(i - 1, j) && len < TramMaxTurnMeters && RunsAlongBoth(i - 1, j))
                         {
                             turns.Add((i - 1, j));
                             for (var k = i; k < j; k++)
